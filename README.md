@@ -16,6 +16,8 @@
 
 <div align="center">
   <video src="static/example.mp4" width="600" controls></video>
+  <br/>
+  <a href="static/example.mp4"><strong>Watch Demo Video</strong></a>
 </div>
 
 <br/>
@@ -126,21 +128,93 @@ Ranks findings dynamically by risk level: Critical, High, Medium, Low, info. Act
 
 Open source. Self-hosted. Get deployed in seconds.
 
+> **Requirements:** Python 3.8+
+
+### <img src="https://upload.wikimedia.org/wikipedia/commons/5/5f/Windows_logo_-_2012.svg" width="16" alt="Windows" /> Windows
+
 ```bash
 # Clone the repository
 git clone https://github.com/patidarganesh/SkillScanner.git
 cd SkillScanner
 
+# (Optional) Create and activate a virtual environment
+python -m venv venv
+venv\Scripts\activate
+
 # Install the native dependencies
 pip install -r requirements.txt
+
+# Add your API keys in config.json
+notepad config.json
 
 # Run the lightweight UI
 python app.py
 ```
 
+### <img src="https://raw.githubusercontent.com/logo/apple/master/images/logo-white.svg" width="16" alt="macOS" /> macOS
+
+```bash
+# Clone the repository
+git clone https://github.com/patidarganesh/SkillScanner.git
+cd SkillScanner
+
+# (Optional) Create and activate a virtual environment
+python3 -m venv venv
+source venv/bin/activate
+
+# Install the native dependencies
+pip3 install -r requirements.txt
+
+# Add your API keys in config.json
+open -e config.json
+
+# Run the lightweight UI
+python3 app.py
+```
+
+### <img src="https://upload.wikimedia.org/wikipedia/commons/3/35/Tux.svg" width="16" alt="Linux" /> Linux
+
+```bash
+# Clone the repository
+git clone https://github.com/patidarganesh/SkillScanner.git
+cd SkillScanner
+
+# (Optional) Create and activate a virtual environment
+python3 -m venv venv
+source venv/bin/activate
+
+# Install the native dependencies
+pip3 install -r requirements.txt
+
+# Add your API keys in config.json
+nano config.json   # or: vim config.json
+
+# Run the lightweight UI
+python3 app.py
+```
+
 This starts the native API server at `http://localhost:5000`. No massive setups required.
 
-> **Requirements:** Python 3.8+
+<br/>
+
+## Configuration
+
+Before running SkillScan, you need to configure your AI provider in `config.json`.
+
+1. Open `config.json` in the root directory.
+2. Set the `"provider"` field to your preferred service (`"anthropic"`, `"openai"`, `"openrouter"`, or `"ollama"`).
+3. Fill in your API key in the corresponding section.
+4. If using **Ollama**, ensure the Ollama server is running locally.
+
+```json
+{
+  "provider": "openai",
+  "openai": {
+    "api_key": "sk-...",
+    "model": "gpt-4o"
+  }
+}
+```
 
 <br/>
 
@@ -165,13 +239,7 @@ python app.py         # Full native runtime execution on local flask
 
 <br/>
 
-## Roadmap
 
-- ⚪ Real-Time Agent Execution Sandboxing Integration
-- ⚪ Cloud Provider Native Repo Connectors (URL Scraping)
-- ⚪ Deeper Context Analysis per Plugin Logic
-
-<br/>
 
 ## Contributing
 
