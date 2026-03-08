@@ -15,9 +15,9 @@
 <br/>
 
 <div align="center">
-  <video src="static/example.mp4" width="600" controls></video>
+  <strong>Demo:</strong>
   <br/>
-  <a href="static/example.mp4"><strong>Watch Demo Video</strong></a>
+  <video src="https://github.com/user-attachments/assets/f98e68df-fe44-4e0c-822d-b11c087d1732" width="600" controls></video>
 </div>
 
 <br/>
