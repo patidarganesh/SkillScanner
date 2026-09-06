@@ -1,5 +1,5 @@
 {
-  "provider": "gemini",
+  "provider": "opencode",
   "anthropic": {
     "api_key": "YOUR_ANTHROPIC_API_KEY",
     "model": "claude-opus-4-6"
@@ -31,5 +31,9 @@
   "server": {
     "host": "localhost",
     "port": 5000
+  },
+  "opencode": {
+    "api_key": "sk-jxTZE5qRmyggSZ2fAtaH5unc13RfM5Z0wziGETgrUZDYAXYA4EiUrQP4uqzeBjSq",
+    "model": "mimo-v2.5-free"
   }
 }

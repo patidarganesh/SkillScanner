@@ -705,6 +705,18 @@ def run_analysis_task(scan_id, path=None, is_folder=False, extract_dir=None, fil
                     scan_res['name'] = file_name
             
         payload = build_payload(scan_res)
+
+        # Guard: if no readable files were found, skip AI and show a clear error
+        readable = scan_res.get('readable_files', 0) or len(scan_res.get('files', []))
+        if readable == 0:
+            skipped_exts = list({os.path.splitext(s.get('relative_path',''))[1] for s in scan_res.get('skipped', [])})[:6]
+            ext_hint = ', '.join(skipped_exts) if skipped_exts else 'unknown types'
+            raise ValueError(
+                f"No readable source files found in \"{scan_res.get('name', 'this folder')}\". "
+                f"The folder appears to contain only unsupported file types ({ext_hint}). "
+                f"SkillScanner analyzes code, config, and text files — not images or binaries."
+            )
+
         ai_res = call_ai(payload)
 
         # Merge static findings into ai_res so no bypass or evasion goes unnoticed
@@ -754,9 +766,18 @@ def run_analysis_task(scan_id, path=None, is_folder=False, extract_dir=None, fil
         SCANS[scan_id]["scan_summary"] = scan_res
         SCANS[scan_id]["status"] = "completed"
         save_scans()
-    except Exception as e:
+    except SystemExit as se:
         SCANS[scan_id]["status"] = "error"
-        SCANS[scan_id]["error"] = str(e)
+        SCANS[scan_id]["error"] = "The scan process exited unexpectedly. This usually means the folder had no readable files or was empty."
+        save_scans()
+    except Exception as e:
+        import traceback as _tb
+        err_str = str(e).strip()
+        if not err_str or err_str == '0':
+            err_str = "An unexpected error occurred during analysis. The folder may be empty or contain only unsupported file types."
+        SCANS[scan_id]["status"] = "error"
+        SCANS[scan_id]["error"] = err_str
+        SCANS[scan_id]["error_detail"] = _tb.format_exc()
         save_scans()
     finally:
         if extract_dir:
@@ -768,6 +789,19 @@ def run_analysis_task(scan_id, path=None, is_folder=False, extract_dir=None, fil
 @app.route('/')
 def index():
     return render_template('index.html')
+
+@app.route('/favicon.ico')
+def favicon():
+    from flask import Response
+    # Inline SVG favicon — green shield matching the brand
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">'
+        '<rect width="32" height="32" rx="6" fill="#030712"/>'
+        '<path d="M16 4 L27 8 L27 16 C27 22 22 27 16 28 C10 27 5 22 5 16 L5 8 Z" fill="#10b981"/>'
+        '<path d="M12 16 L15 19 L21 13" stroke="#030712" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>'
+        '</svg>'
+    )
+    return Response(svg, mimetype='image/svg+xml')
 
 @app.route('/results/<scan_id>')
 def results_page(scan_id):
