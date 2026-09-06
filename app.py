@@ -597,8 +597,12 @@ def call_ai(payload: str) -> dict:
     conf = load_config()
     provider_name = _resolve_provider_name(conf)
     p_conf = conf.get(provider_name, {})
-    default_model = (DYNAMIC_CATALOG.get(provider_name) or BUILTIN_MODELS.get(provider_name) or ["default"])[0]
-    model = p_conf.get("model", default_model)
+    cat_entry = DYNAMIC_CATALOG.get(provider_name) or {}
+    available_models = cat_entry.get("models", []) if isinstance(cat_entry, dict) else (cat_entry if isinstance(cat_entry, list) else [])
+    if not available_models:
+        available_models = BUILTIN_MODELS.get(provider_name, ["default"])
+    default_model = available_models[0] if available_models else "default"
+    model = p_conf.get("model") or default_model
 
     api_key = _resolve_api_key(provider_name, p_conf)
     if provider_name not in ("ollama", "lmstudio"):
