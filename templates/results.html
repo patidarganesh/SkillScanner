@@ -151,17 +151,26 @@
         .nav-logo {
             display: flex;
             align-items: center;
-            gap: 15px;
+            gap: 10px;
             font-family: var(--font-head);
             font-weight: 800;
-            font-size: 1.5rem;
+            font-size: 1.4rem;
             color: #fff;
             text-decoration: none;
+            letter-spacing: -0.5px;
         }
 
         .nav-logo img {
-            height: 48px;
+            height: 56px;
             width: auto;
+            object-fit: contain;
+            filter: drop-shadow(0 2px 8px rgba(16, 185, 129, 0.25));
+        }
+
+        .nav-logo-text {
+            background: linear-gradient(135deg, #fff 0%, var(--green) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
         }
 
         .container {
@@ -919,7 +928,8 @@
     <div class="navbar">
         <a href="/" class="nav-logo">
             <img src="{{ url_for('static', filename='logo-transparent.png') }}" alt="SkillScan"
-                onerror="this.onerror=null;this.src='';this.style.display='none'">
+                onerror="this.onerror=null;this.style.display='none';document.getElementById('nav-fb-text').style.webkitTextFillColor='white'">
+            <span class="nav-logo-text" id="nav-fb-text">SkillScan</span>
         </a>
         <a href="/" class="primary"
             style="padding: 8px 16px; border-radius: 6px; font-size: 0.9rem; background: rgba(255,255,255,0.1); border: 1px solid var(--border); color: #fff; display: inline-flex; align-items:center;">
