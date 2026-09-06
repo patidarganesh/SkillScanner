@@ -10,12 +10,13 @@ import time
 import uuid
 import shutil
 from pathlib import Path
-from flask import Flask, request, jsonify, send_from_directory, render_template
+from flask import Flask, request, jsonify, render_template
 
 from scanner import scan
 
 BASE_DIR = Path(__file__).parent.absolute()
 SCANS_FILE = BASE_DIR / "scans.json"
+CATALOG_FILE = BASE_DIR / "models_catalog.json"
 SCANS = {}
 
 app = Flask(__name__)
@@ -23,9 +24,327 @@ app = Flask(__name__)
 ENV_API_KEY_VARS = {
     "anthropic": "ANTHROPIC_API_KEY",
     "openai": "OPENAI_API_KEY",
-    "openrouter": "OPENROUTER_API_KEY",
     "gemini": "GEMINI_API_KEY",
+    "google": "GEMINI_API_KEY",
+    "deepseek": "DEEPSEEK_API_KEY",
+    "groq": "GROQ_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+    "mistral": "MISTRAL_API_KEY",
+    "xai": "XAI_API_KEY",
+    "together": "TOGETHER_API_KEY",
+    "togetherai": "TOGETHER_API_KEY",
+    "fireworks": "FIREWORKS_API_KEY",
+    "fireworks-ai": "FIREWORKS_API_KEY",
+    "perplexity": "PERPLEXITY_API_KEY",
+    "cerebras": "CEREBRAS_API_KEY",
+    "cohere": "COHERE_API_KEY",
+    "deepinfra": "DEEPINFRA_API_KEY",
+    "siliconflow": "SILICONFLOW_API_KEY",
+    "custom": "CUSTOM_API_KEY",
 }
+
+DEFAULT_BASE_URLS = {
+    "deepseek": "https://api.deepseek.com",
+    "groq": "https://api.groq.com/openai/v1",
+    "openrouter": "https://openrouter.ai/api/v1",
+    "mistral": "https://api.mistral.ai/v1",
+    "xai": "https://api.x.ai/v1",
+    "together": "https://api.together.xyz/v1",
+    "togetherai": "https://api.together.xyz/v1",
+    "fireworks": "https://api.fireworks.ai/inference/v1",
+    "fireworks-ai": "https://api.fireworks.ai/inference/v1",
+    "perplexity": "https://api.perplexity.ai",
+    "cerebras": "https://api.cerebras.ai/v1",
+    "deepinfra": "https://api.deepinfra.com/v1/openai",
+    "siliconflow": "https://api.siliconflow.cn/v1",
+    "ollama": "http://localhost:11434",
+    "lmstudio": "http://localhost:1234/v1",
+    "custom": "http://localhost:8000/v1"
+}
+
+BUILTIN_MODELS = {
+    "anthropic": [
+        "claude-3-7-sonnet",
+        "claude-3-5-sonnet-latest",
+        "claude-3-5-haiku-latest",
+        "claude-3-opus-latest",
+        "claude-3-5-sonnet-20241022",
+        "claude-3-haiku-20240307"
+    ],
+    "openai": [
+        "gpt-4o",
+        "gpt-4o-mini",
+        "o1",
+        "o1-mini",
+        "o3-mini",
+        "gpt-4.5-preview",
+        "gpt-4-turbo",
+        "gpt-4",
+        "gpt-3.5-turbo"
+    ],
+    "gemini": [
+        "gemini-2.0-flash",
+        "gemini-2.0-pro-exp-02-05",
+        "gemini-2.0-flash-thinking-exp",
+        "gemini-1.5-pro",
+        "gemini-1.5-flash",
+        "gemini-1.5-flash-8b"
+    ],
+    "deepseek": [
+        "deepseek-chat",
+        "deepseek-reasoner"
+    ],
+    "groq": [
+        "llama-3.3-70b-versatile",
+        "llama-3.1-8b-instant",
+        "deepseek-r1-distill-llama-70b",
+        "gemma2-9b-it",
+        "mixtral-8x7b-32768"
+    ],
+    "openrouter": [
+        "google/gemini-2.0-flash-001",
+        "anthropic/claude-3.5-sonnet",
+        "openai/gpt-4o",
+        "deepseek/deepseek-chat",
+        "meta-llama/llama-3.3-70b-instruct",
+        "mistralai/mistral-large-2407",
+        "meta-llama/llama-3.1-405b"
+    ],
+    "mistral": [
+        "mistral-large-latest",
+        "mistral-medium-latest",
+        "mistral-small-latest",
+        "codestral-latest"
+    ],
+    "xai": [
+        "grok-2-latest",
+        "grok-2",
+        "grok-beta"
+    ],
+    "together": [
+        "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+        "deepseek-ai/DeepSeek-R1",
+        "Qwen/Qwen2.5-72B-Instruct-Turbo",
+        "mistralai/Mixtral-8x22B-Instruct-v0.1"
+    ],
+    "togetherai": [
+        "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+        "deepseek-ai/DeepSeek-R1",
+        "Qwen/Qwen2.5-72B-Instruct-Turbo"
+    ],
+    "fireworks": [
+        "accounts/fireworks/models/deepseek-r1",
+        "accounts/fireworks/models/llama-v3p3-70b-instruct",
+        "accounts/fireworks/models/qwen2p5-72b-instruct"
+    ],
+    "fireworks-ai": [
+        "accounts/fireworks/models/deepseek-r1",
+        "accounts/fireworks/models/llama-v3p3-70b-instruct",
+        "accounts/fireworks/models/qwen2p5-72b-instruct"
+    ],
+    "perplexity": [
+        "sonar-pro",
+        "sonar",
+        "sonar-reasoning"
+    ],
+    "cerebras": [
+        "llama3.3-70b",
+        "llama3.1-8b"
+    ],
+    "cohere": [
+        "command-r-plus-08-2024",
+        "command-r-08-2024",
+        "command-r-plus",
+        "command-r"
+    ],
+    "deepinfra": [
+        "meta-llama/Meta-Llama-3.1-70B-Instruct",
+        "deepseek-ai/DeepSeek-R1",
+        "Qwen/Qwen2.5-72B-Instruct"
+    ],
+    "siliconflow": [
+        "deepseek-ai/DeepSeek-V3",
+        "deepseek-ai/DeepSeek-R1",
+        "Qwen/Qwen2.5-72B-Instruct"
+    ],
+    "ollama": [
+        "llama3.3", "llama3.2", "deepseek-r1", "qwen2.5", "mistral",
+        "gemma2", "phi4", "phi3", "deepseek-coder", "codellama"
+    ],
+    "lmstudio": [
+        "local-model", "loaded-model"
+    ],
+    "custom": [
+        "custom-model", "default"
+    ]
+}
+
+POPULAR_PROVIDERS = [
+    "anthropic",
+    "openai",
+    "gemini",
+    "deepseek",
+    "groq",
+    "openrouter",
+    "mistral",
+    "xai",
+    "together",
+    "fireworks",
+    "perplexity",
+    "nvidia",
+    "cerebras",
+    "cohere",
+    "deepinfra",
+    "siliconflow",
+]
+
+LOCAL_PROVIDERS = [
+    "ollama",
+    "lmstudio",
+    "custom"
+]
+
+PROVIDER_ALIASES = {
+    "google": "gemini",
+    "gemini": "google",
+    "togetherai": "together",
+    "together": "togetherai",
+    "fireworks-ai": "fireworks",
+    "fireworks": "fireworks-ai"
+}
+
+# In-memory catalog of all 200+ providers and their models
+DYNAMIC_CATALOG = {}
+
+def _ensure_core_providers():
+    global DYNAMIC_CATALOG
+    # Ensure local runtimes
+    if "ollama" not in DYNAMIC_CATALOG:
+        DYNAMIC_CATALOG["ollama"] = {
+            "id": "ollama",
+            "name": "Ollama (Local)",
+            "api": "http://localhost:11434",
+            "env": [],
+            "npm": "@ai-sdk/openai-compatible",
+            "models": BUILTIN_MODELS.get("ollama", ["llama3.3", "llama3.2", "deepseek-r1"])
+        }
+    if "lmstudio" not in DYNAMIC_CATALOG:
+        DYNAMIC_CATALOG["lmstudio"] = {
+            "id": "lmstudio",
+            "name": "LM Studio (Local)",
+            "api": "http://localhost:1234/v1",
+            "env": [],
+            "npm": "@ai-sdk/openai-compatible",
+            "models": BUILTIN_MODELS.get("lmstudio", ["local-model"])
+        }
+    if "custom" not in DYNAMIC_CATALOG:
+        DYNAMIC_CATALOG["custom"] = {
+            "id": "custom",
+            "name": "Custom (OpenAI-Compatible)",
+            "api": "http://localhost:8000/v1",
+            "env": ["CUSTOM_API_KEY"],
+            "npm": "@ai-sdk/openai-compatible",
+            "models": BUILTIN_MODELS.get("custom", ["default", "custom-model"])
+        }
+
+    # Ensure aliases
+    if "google" in DYNAMIC_CATALOG and "gemini" not in DYNAMIC_CATALOG:
+        DYNAMIC_CATALOG["gemini"] = dict(DYNAMIC_CATALOG["google"])
+        DYNAMIC_CATALOG["gemini"]["id"] = "gemini"
+        DYNAMIC_CATALOG["gemini"]["name"] = "Google Gemini"
+    if "togetherai" in DYNAMIC_CATALOG and "together" not in DYNAMIC_CATALOG:
+        DYNAMIC_CATALOG["together"] = dict(DYNAMIC_CATALOG["togetherai"])
+        DYNAMIC_CATALOG["together"]["id"] = "together"
+    if "fireworks-ai" in DYNAMIC_CATALOG and "fireworks" not in DYNAMIC_CATALOG:
+        DYNAMIC_CATALOG["fireworks"] = dict(DYNAMIC_CATALOG["fireworks-ai"])
+        DYNAMIC_CATALOG["fireworks"]["id"] = "fireworks"
+
+def _init_catalog():
+    global DYNAMIC_CATALOG
+    loaded = False
+
+    # 1. First check local catalog file if present
+    if CATALOG_FILE.exists():
+        try:
+            with open(CATALOG_FILE, 'r', encoding='utf-8') as f:
+                disk_cat = json.load(f)
+                for k, v in disk_cat.items():
+                    if isinstance(v, dict):
+                        DYNAMIC_CATALOG[k] = v
+                    elif isinstance(v, list):
+                        DYNAMIC_CATALOG[k] = {
+                            "id": k,
+                            "name": k.capitalize(),
+                            "api": DEFAULT_BASE_URLS.get(k, ""),
+                            "env": [ENV_API_KEY_VARS.get(k, f"{k.upper()}_API_KEY")],
+                            "npm": "@ai-sdk/openai-compatible",
+                            "models": v
+                        }
+                if len(DYNAMIC_CATALOG) > 10:
+                    loaded = True
+        except Exception:
+            pass
+
+    # 2. Check local opencode models.json cache
+    if not loaded:
+        local_cache = Path.home() / ".cache" / "opencode" / "models.json"
+        if local_cache.exists():
+            try:
+                with open(local_cache, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    for p_id, p_info in data.items():
+                        DYNAMIC_CATALOG[p_id] = {
+                            "id": p_id,
+                            "name": p_info.get("name", p_id),
+                            "api": p_info.get("api") or "",
+                            "env": p_info.get("env") or [],
+                            "npm": p_info.get("npm") or "",
+                            "models": list(p_info.get("models", {}).keys())
+                        }
+                    loaded = True
+            except Exception:
+                pass
+
+    # 3. Fallback to builtin models
+    if not loaded:
+        for k, v in BUILTIN_MODELS.items():
+            DYNAMIC_CATALOG[k] = {
+                "id": k,
+                "name": k.capitalize(),
+                "api": DEFAULT_BASE_URLS.get(k, ""),
+                "env": [ENV_API_KEY_VARS.get(k, f"{k.upper()}_API_KEY")],
+                "npm": "@ai-sdk/openai-compatible",
+                "models": list(v)
+            }
+
+    _ensure_core_providers()
+
+    # Background fetch to refresh catalog from models.dev if needed
+    def refresh_worker():
+        try:
+            req = urllib.request.Request('https://models.dev/api.json', headers={'User-Agent': 'SkillScanner/1.0'})
+            with urllib.request.urlopen(req, timeout=5) as r:
+                data = json.loads(r.read().decode('utf-8'))
+                for p_id, p_info in data.items():
+                    m_list = list(p_info.get('models', {}).keys())
+                    if m_list:
+                        DYNAMIC_CATALOG[p_id] = {
+                            "id": p_id,
+                            "name": p_info.get("name", p_id),
+                            "api": p_info.get("api") or "",
+                            "env": p_info.get("env") or [],
+                            "npm": p_info.get("npm") or "",
+                            "models": m_list
+                        }
+                _ensure_core_providers()
+                with open(CATALOG_FILE, 'w', encoding='utf-8') as f:
+                    json.dump(DYNAMIC_CATALOG, f, indent=2)
+        except Exception:
+            pass
+
+    threading.Thread(target=refresh_worker, daemon=True).start()
+
+_init_catalog()
 
 def _load_dotenv() -> None:
     env_path = BASE_DIR / ".env"
@@ -72,11 +391,50 @@ def _resolve_api_key(provider_name: str, provider_conf: dict) -> str:
     if api_key and "YOUR_" not in api_key:
         return api_key
 
-    env_var = ENV_API_KEY_VARS.get(provider_name)
-    if env_var:
-        env_val = str(os.getenv(env_var, "") or "").strip()
-        if env_val:
-            return env_val
+    # Check env vars
+    env_vars = []
+    if provider_name in ENV_API_KEY_VARS:
+        env_vars.append(ENV_API_KEY_VARS[provider_name])
+
+    cat_entry = DYNAMIC_CATALOG.get(provider_name) or {}
+    if isinstance(cat_entry, dict) and cat_entry.get("env"):
+        for ev in cat_entry["env"]:
+            if ev not in env_vars:
+                env_vars.append(ev)
+
+    alias = PROVIDER_ALIASES.get(provider_name)
+    if alias:
+        alias_cat = DYNAMIC_CATALOG.get(alias) or {}
+        if isinstance(alias_cat, dict) and alias_cat.get("env"):
+            for ev in alias_cat["env"]:
+                if ev not in env_vars:
+                    env_vars.append(ev)
+
+    for ev in env_vars:
+        val = str(os.getenv(ev, "") or "").strip()
+        if val:
+            return val
+
+    # Check common fallback keys
+    if provider_name in ("gemini", "google"):
+        for alt in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY"):
+            val = str(os.getenv(alt, "") or "").strip()
+            if val:
+                return val
+
+    # Check local saved auth credentials (e.g. from local environment)
+    try:
+        auth_file = Path.home() / ".local" / "share" / "opencode" / "auth.json"
+        if auth_file.exists():
+            with open(auth_file, "r", encoding="utf-8") as f:
+                auth_data = json.load(f)
+                for cand in (provider_name, alias):
+                    if cand and cand in auth_data:
+                        cand_entry = auth_data[cand]
+                        if isinstance(cand_entry, dict) and cand_entry.get("key"):
+                            return cand_entry["key"]
+    except Exception:
+        pass
 
     return api_key
 
@@ -103,44 +461,60 @@ def save_scans():
 
 SCANS = load_scans()
 
-PROVIDERS = {
-    "anthropic": {
-        "url": "https://api.anthropic.com/v1/messages",
-        "headers": lambda cfg: {
-            "x-api-key": cfg.get("api_key", ""),
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json"
-        },
-        "body": lambda model, system, user: {
+def _get_provider_endpoint(provider_name: str, cfg: dict) -> str:
+    base = cfg.get("base_url") or DEFAULT_BASE_URLS.get(provider_name, "")
+    if not base:
+        cat_entry = DYNAMIC_CATALOG.get(provider_name) or {}
+        if isinstance(cat_entry, dict) and cat_entry.get("api"):
+            base = cat_entry["api"]
+
+    base = str(base).rstrip('/')
+
+    if provider_name == "anthropic":
+        return "https://api.anthropic.com/v1/messages"
+    elif provider_name in ("gemini", "google"):
+        return "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+    elif provider_name == "cohere":
+        return f"{base}/chat" if base else "https://api.cohere.com/v2/chat"
+    elif provider_name == "ollama":
+        return f"{base}/api/chat" if base else "http://localhost:11434/api/chat"
+    elif provider_name == "custom":
+        if not base:
+            base = "http://localhost:8000/v1"
+        return base if base.endswith('/chat/completions') else f"{base}/chat/completions"
+    else:
+        # Standard OpenAI-compatible provider (covers 200+ providers)
+        if not base:
+            base = DEFAULT_BASE_URLS.get(provider_name, "https://api.openai.com/v1")
+        return base if base.endswith('/chat/completions') else f"{base}/chat/completions"
+
+def _get_provider_headers(provider_name: str, cfg: dict) -> dict:
+    key = cfg.get("api_key", "")
+    headers = {"Content-Type": "application/json"}
+    if provider_name == "anthropic":
+        headers["x-api-key"] = key
+        headers["anthropic-version"] = "2023-06-01"
+    elif provider_name == "openrouter":
+        headers["Authorization"] = f"Bearer {key}"
+        headers["HTTP-Referer"] = "https://github.com/patidarganesh/SkillScanner"
+        headers["X-Title"] = "SkillScanner"
+    elif provider_name in ("ollama",):
+        pass # Ollama does not require auth header by default
+    else:
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
+    return headers
+
+def _get_provider_body(provider_name: str, model: str, system: str, user: str, json_mode: bool = True) -> dict:
+    if provider_name == "anthropic":
+        return {
             "model": model,
             "max_tokens": 8000,
             "system": system,
             "messages": [{"role": "user", "content": user}]
-        },
-        "extract": lambda data: data["content"][0]["text"]
-    },
-    "openai": {
-        "url": "https://api.openai.com/v1/chat/completions",
-        "headers": lambda cfg: {
-            "Authorization": f"Bearer {cfg.get('api_key', '')}",
-            "Content-Type": "application/json"
-        },
-        "body": lambda model, system, user: {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user}
-            ],
-            "response_format": {"type": "json_object"}
-        },
-        "extract": lambda data: data["choices"][0]["message"]["content"]
-    },
-    "ollama": {
-        "url": lambda cfg: f"{cfg.get('base_url', 'http://localhost:11434').rstrip('/')}/api/chat",
-        "headers": lambda cfg: {
-            "Content-Type": "application/json"
-        },
-        "body": lambda model, system, user: {
+        }
+    elif provider_name == "ollama":
+        return {
             "model": model,
             "messages": [
                 {"role": "system", "content": system},
@@ -148,44 +522,43 @@ PROVIDERS = {
             ],
             "stream": False,
             "format": "json"
-        },
-        "extract": lambda data: data["message"]["content"]
-    },
-    "openrouter": {
-        "url": "https://openrouter.ai/api/v1/chat/completions",
-        "headers": lambda cfg: {
-            "Authorization": f"Bearer {cfg.get('api_key', '')}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://github.com/patidarganesh/SkillScanner",
-            "X-Title": "SkillScanner"
-        },
-        "body": lambda model, system, user: {
+        }
+    else:
+        # Standard OpenAI compatible
+        body = {
             "model": model,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user}
-            ],
-            "response_format": {"type": "json_object"}
-        },
-        "extract": lambda data: data["choices"][0]["message"]["content"]
-    },
-    "gemini": {
-        "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-        "headers": lambda cfg: {
-            "Authorization": f"Bearer {cfg.get('api_key', '')}",
-            "Content-Type": "application/json"
-        },
-        "body": lambda model, system, user: {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user}
-            ],
-            "response_format": {"type": "json_object"}
-        },
-        "extract": lambda data: data["choices"][0]["message"]["content"]
-    }
-}
+            ]
+        }
+        if json_mode and not model.startswith("o1"):
+            body["response_format"] = {"type": "json_object"}
+        return body
+
+def _extract_provider_response(provider_name: str, data: dict) -> str:
+    if provider_name == "anthropic":
+        return data["content"][0]["text"]
+    elif provider_name == "ollama":
+        return data["message"]["content"]
+    elif provider_name == "cohere":
+        if "message" in data and "content" in data["message"]:
+            items = data["message"]["content"]
+            if items and isinstance(items, list) and "text" in items[0]:
+                return items[0]["text"]
+        if "text" in data:
+            return data["text"]
+        if "choices" in data:
+            return data["choices"][0]["message"]["content"]
+        return str(data)
+    else:
+        # OpenAI style
+        if "choices" in data and len(data["choices"]) > 0:
+            msg = data["choices"][0].get("message", {})
+            return msg.get("content", "")
+        elif "content" in data:
+            return str(data["content"])
+        return str(data)
 
 def clean_json(raw: str) -> str:
     raw = raw.strip()
@@ -195,42 +568,13 @@ def clean_json(raw: str) -> str:
         raw = "\n".join(lines).strip()
     return raw
 
-def call_ai(payload: str) -> dict:
-    _load_dotenv()
-    conf = load_config()
-    provider_name = _resolve_provider_name(conf)
-    p_conf = conf.get(provider_name, {})
-    model = p_conf.get("model", "claude-3-5-sonnet-latest")
-
-    provider = PROVIDERS.get(provider_name)
-    if not provider:
-        raise Exception(f"Unknown provider: {provider_name}")
-
-    api_key = _resolve_api_key(provider_name, p_conf)
-    if provider_name != "ollama":
-        if not api_key or "YOUR_" in api_key:
-            env_hint = ENV_API_KEY_VARS.get(provider_name)
-            hint = f" Set {env_hint} or put the key in config.json." if env_hint else " Put the key in config.json."
-            raise Exception(f"API key for {provider_name} is missing or not configured.{hint}")
-
-    effective_conf = dict(p_conf) if isinstance(p_conf, dict) else {}
-    if api_key:
-        effective_conf["api_key"] = api_key
-
-    url = provider["url"](effective_conf) if callable(provider["url"]) else provider["url"]
-    headers_dict = provider["headers"](effective_conf)
-
-    try:
-        with open(BASE_DIR / "prompt.md", "r", encoding="utf-8") as f:
-            system_prompt = f.read()
-    except Exception:
-        system_prompt = "Return raw JSON only."
-
-    body_data = provider["body"](model, system_prompt, payload)
+def _execute_ai_request(provider_name: str, effective_conf: dict, model: str, system_prompt: str, user_payload: str, json_mode: bool = True) -> str:
+    url = _get_provider_endpoint(provider_name, effective_conf)
+    headers_dict = _get_provider_headers(provider_name, effective_conf)
+    body_data = _get_provider_body(provider_name, model, system_prompt, user_payload, json_mode)
     data = json.dumps(body_data).encode("utf-8")
 
     req = urllib.request.Request(url, data=data, method="POST")
-
     for key, value in headers_dict.items():
         req.add_header(key, value)
 
@@ -243,19 +587,57 @@ def call_ai(payload: str) -> dict:
         print("HEADERS:", _redact_headers(dict(req.headers)))
         print("------------------------------")
 
-    try:
-        with urllib.request.urlopen(req, timeout=180) as response:
-            resp_body = response.read().decode("utf-8")
-            resp_data = json.loads(resp_body)
-            raw_text = provider["extract"](resp_data)
+    with urllib.request.urlopen(req, timeout=180) as response:
+        resp_body = response.read().decode("utf-8", errors="replace")
+        resp_data = json.loads(resp_body)
+        return _extract_provider_response(provider_name, resp_data)
 
-            clean_text = clean_json(raw_text)
-            return json.loads(clean_text)
+def call_ai(payload: str) -> dict:
+    _load_dotenv()
+    conf = load_config()
+    provider_name = _resolve_provider_name(conf)
+    p_conf = conf.get(provider_name, {})
+    default_model = (DYNAMIC_CATALOG.get(provider_name) or BUILTIN_MODELS.get(provider_name) or ["default"])[0]
+    model = p_conf.get("model", default_model)
+
+    api_key = _resolve_api_key(provider_name, p_conf)
+    if provider_name not in ("ollama", "lmstudio"):
+        if not api_key or "YOUR_" in api_key:
+            env_hint = ENV_API_KEY_VARS.get(provider_name)
+            hint = f" Set {env_hint} or configure it in Settings." if env_hint else " Configure it in Settings."
+            raise Exception(f"API key for {provider_name} is missing.{hint}")
+
+    effective_conf = dict(p_conf) if isinstance(p_conf, dict) else {}
+    if api_key:
+        effective_conf["api_key"] = api_key
+    if "base_url" not in effective_conf and provider_name in DEFAULT_BASE_URLS:
+        effective_conf["base_url"] = DEFAULT_BASE_URLS[provider_name]
+
+    try:
+        with open(BASE_DIR / "prompt.md", "r", encoding="utf-8") as f:
+            system_prompt = f.read()
+    except Exception:
+        system_prompt = "Return raw JSON only."
+
+    try:
+        # First attempt with json_mode=True
+        raw_text = _execute_ai_request(provider_name, effective_conf, model, system_prompt, payload, json_mode=True)
+        clean_text = clean_json(raw_text)
+        return json.loads(clean_text)
     except urllib.error.HTTPError as e:
-        error_body = e.read().decode("utf-8")
+        error_body = e.read().decode("utf-8", errors="replace")
+        # If model doesn't support json_mode/response_format, retry once without response_format
+        if "response_format" in error_body.lower() or "json_object" in error_body.lower():
+            try:
+                raw_text = _execute_ai_request(provider_name, effective_conf, model, system_prompt, payload, json_mode=False)
+                clean_text = clean_json(raw_text)
+                return json.loads(clean_text)
+            except Exception:
+                pass
+
         try:
             err_json = json.loads(error_body)
-            error_msg = err_json.get("error", {}).get("message", error_body)
+            error_msg = err_json.get("error", {}).get("message", error_body) if isinstance(err_json.get("error"), dict) else err_json.get("error", error_body)
             raise Exception(f"HTTPError {e.code}: {error_msg}")
         except Exception:
             raise Exception(f"HTTPError {e.code}: {error_body}")
@@ -444,7 +826,7 @@ def analyse():
     if not data or 'path' not in data:
         return jsonify({"success": False, "error": "Missing path"}), 400
         
-    path = data['path']
+    path = str(data['path']).strip().strip('"').strip("'")
     if not os.path.exists(path):
         return jsonify({"success": False, "error": f"Path not found: {path}"}), 404
         
@@ -493,6 +875,7 @@ def analyse_zip():
         return jsonify({"success": False, "error": str(e)}), 500
 
 @app.route('/analyse-folder', methods=['POST'])
+@app.route('/analyse-folder-upload', methods=['POST'])
 def analyse_folder():
     files = request.files.getlist('files')
     paths = request.form.getlist('paths')
@@ -511,11 +894,9 @@ def analyse_folder():
             root_folder_name = first_path.split('/')[0]
 
     try:
-        for file, rel_path in zip(files, paths):
-            if not rel_path:
-                rel_path = file.filename
-                
-            clean_rel = os.path.normpath(rel_path).lstrip(os.sep)
+        for idx, file in enumerate(files):
+            rel_path = paths[idx] if idx < len(paths) and paths[idx] else (file.filename or f"file_{idx}")
+            clean_rel = os.path.normpath(rel_path.replace('\\', '/')).lstrip('/\\.')
             target_file_path = os.path.join(extract_dir, clean_rel)
             os.makedirs(os.path.dirname(target_file_path), exist_ok=True)
             file.save(target_file_path)
@@ -533,6 +914,7 @@ def analyse_folder():
         shutil.rmtree(temp_dir, ignore_errors=True)
         return jsonify({"success": False, "error": str(e)}), 500
 
+@app.route('/api/dummy', methods=['POST'])
 @app.route('/api/dummy-scan', methods=['POST'])
 def dummy_scan():
     scan_id = str(uuid.uuid4())
@@ -631,91 +1013,264 @@ def dummy_scan():
     save_scans()
     return jsonify({"success": True, "scan_id": scan_id})
 
+@app.route('/config', methods=['GET', 'POST'])
 @app.route('/api/config', methods=['GET', 'POST'])
 def handle_config():
     if request.method == 'POST':
-        data = request.json
+        data = request.json or {}
         provider = data.get("provider")
         api_key = data.get("api_key")
         model = data.get("model")
+        base_url = data.get("base_url")
         
         conf = load_config()
-        if provider in ["anthropic", "openai", "openrouter", "ollama", "gemini"]:
+        if provider:
             conf["provider"] = provider
-            if api_key:
-                if provider not in conf:
-                    conf[provider] = {}
-                elif not isinstance(conf[provider], dict):
-                    conf[provider] = {}
-                conf[provider]["api_key"] = api_key
-            if model:
-                if provider not in conf:
-                    conf[provider] = {}
-                elif not isinstance(conf[provider], dict):
-                    conf[provider] = {}
-                conf[provider]["model"] = model
+            if provider not in conf or not isinstance(conf[provider], dict):
+                conf[provider] = {}
+            if api_key is not None and str(api_key).strip():
+                conf[provider]["api_key"] = str(api_key).strip()
+            if model is not None and str(model).strip():
+                conf[provider]["model"] = str(model).strip()
+            if base_url is not None and str(base_url).strip():
+                conf[provider]["base_url"] = str(base_url).strip()
             
             with open(BASE_DIR / 'config.json', 'w', encoding='utf-8') as f:
                 json.dump(conf, f, indent=2)
             return jsonify({"success": True})
-        return jsonify({"success": False, "error": "Invalid provider"}), 400
+        return jsonify({"success": False, "error": "No provider specified"}), 400
         
     conf = load_config()
-    curr_provider = conf.get("provider", "anthropic")
-    
-    # Return available options for UI dropdowns
-    options = {
-        "anthropic": [
-            "claude-3-7-sonnet", 
-            "claude-3-5-sonnet-latest", 
-            "claude-3-5-haiku-latest", 
-            "claude-3-opus-latest",
-            "claude-3-5-sonnet-20241022",
-            "claude-3-opus-20240229", 
-            "claude-3-haiku-20240307"
-        ],
-        "openai": [
-            "gpt-4o", 
-            "gpt-4o-mini", 
-            "o1", 
-            "o1-mini", 
-            "o3-mini", 
-            "gpt-4.5", 
-            "gpt-4-turbo", 
-            "gpt-4", 
-            "gpt-3.5-turbo"
-        ],
-        "ollama": [
-            "llama3.2", "llama3.1", "llama3", "mistral", "mixtral", "gemma2", "gemma", "qwen2.5", 
-            "phi3", "phi4", "deepseek-v3", "deepseek-coder", "command-r", "codellama"
-        ],
-        "openrouter": [
-            "google/gemini-2.0-flash-001",
-            "anthropic/claude-3.5-sonnet", 
-            "openai/gpt-4o", 
-            "openai/gpt-4o-mini",
-            "google/gemini-pro-1.5", 
-            "meta-llama/llama-3.1-405b", 
-            "meta-llama/llama-3.1-70b", 
-            "mistralai/mistral-large-2407",
-            "deepseek/deepseek-chat"
-        ],
-        "gemini": [
-            "gemini-2.0-flash", 
-            "gemini-2.0-flash-thinking-exp", 
-            "gemini-2.0-pro-exp-02-05", 
-            "gemini-1.5-pro", 
-            "gemini-1.5-flash", 
-            "gemini-1.5-flash-8b"
-        ]
-    }
-    
+    curr_provider = _resolve_provider_name(conf)
+    p_conf = conf.get(curr_provider, {})
+    if not isinstance(p_conf, dict):
+        p_conf = {}
+
+    curr_cat = DYNAMIC_CATALOG.get(curr_provider, {})
+    curr_models = curr_cat.get("models", []) if isinstance(curr_cat, dict) else (curr_cat if isinstance(curr_cat, list) else [])
+    curr_model = p_conf.get("model") or (curr_models[0] if curr_models else "default")
+    has_key = bool(_resolve_api_key(curr_provider, p_conf))
+    curr_base_url = p_conf.get("base_url") or (curr_cat.get("api", "") if isinstance(curr_cat, dict) else "") or DEFAULT_BASE_URLS.get(curr_provider, "")
+
+    # Providers metadata and models options for all 200+ providers
+    options = {}
+    providers_meta = {}
+    all_keys = sorted(list(DYNAMIC_CATALOG.keys()))
+
+    for p_name in all_keys:
+        p_info = DYNAMIC_CATALOG[p_name]
+        p_models = p_info.get("models", []) if isinstance(p_info, dict) else (p_info if isinstance(p_info, list) else [])
+        options[p_name] = p_models
+        cfg = conf.get(p_name, {})
+        if not isinstance(cfg, dict):
+            cfg = {}
+
+        p_display = p_info.get("name", p_name.capitalize()) if isinstance(p_info, dict) else p_name.capitalize()
+        p_api = (p_info.get("api") if isinstance(p_info, dict) else "") or DEFAULT_BASE_URLS.get(p_name, "")
+        p_env = p_info.get("env", []) if isinstance(p_info, dict) else [ENV_API_KEY_VARS.get(p_name, f"{p_name.upper()}_API_KEY")]
+
+        providers_meta[p_name] = {
+            "id": p_name,
+            "name": p_display,
+            "has_key": bool(_resolve_api_key(p_name, cfg)),
+            "model": cfg.get("model") or (p_models[0] if p_models else "default"),
+            "base_url": cfg.get("base_url") or p_api,
+            "requires_key": p_name not in ("ollama", "lmstudio"),
+            "requires_base_url": p_name in ("ollama", "lmstudio", "custom"),
+            "env_vars": p_env,
+            "models_count": len(p_models)
+        }
+
+    total_models = sum(len(v) for v in options.values())
+
     return jsonify({
+        "success": True,
+        "provider": curr_provider,
+        "model": curr_model,
         "current_provider": curr_provider,
-        "current_model": conf.get(curr_provider, {}).get("model", ""),
-        "has_key": bool(conf.get(curr_provider, {}).get("api_key") and "YOUR_" not in conf.get(curr_provider, {}).get("api_key", "")),
-        "options": options
+        "current_model": curr_model,
+        "base_url": curr_base_url,
+        "has_key": has_key,
+        "options": options,
+        "providers_meta": providers_meta,
+        "popular_providers": POPULAR_PROVIDERS,
+        "local_providers": LOCAL_PROVIDERS,
+        "all_providers": all_keys,
+        "total_providers": len(all_keys),
+        "total_models": total_models
     })
+
+@app.route('/api/auto-fetch-models', methods=['GET', 'POST'])
+@app.route('/api/fetch-models', methods=['GET', 'POST'])
+def auto_fetch_models():
+    if request.method == 'POST':
+        data = request.json or {}
+        provider = data.get("provider", "openai")
+        base_url = data.get("base_url")
+        api_key = data.get("api_key")
+    else:
+        provider = request.args.get("provider", "openai")
+        base_url = request.args.get("base_url")
+        api_key = request.args.get("api_key")
+
+    provider = str(provider).strip().lower()
+    conf = load_config()
+    p_conf = conf.get(provider, {})
+    if not isinstance(p_conf, dict):
+        p_conf = {}
+
+    if not base_url:
+        base_url = p_conf.get("base_url") or DEFAULT_BASE_URLS.get(provider, "")
+        if not base_url:
+            cat_entry = DYNAMIC_CATALOG.get(provider) or {}
+            if isinstance(cat_entry, dict) and cat_entry.get("api"):
+                base_url = cat_entry["api"]
+
+    if not api_key:
+        api_key = _resolve_api_key(provider, p_conf)
+
+    # 1. Ollama local
+    if provider == "ollama":
+        ollama_url = f"{(base_url or 'http://localhost:11434').rstrip('/')}/api/tags"
+        try:
+            req = urllib.request.Request(ollama_url)
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+                models = [m.get("name") for m in data.get("models", []) if m.get("name")]
+                if models:
+                    if "ollama" in DYNAMIC_CATALOG:
+                        DYNAMIC_CATALOG["ollama"]["models"] = models
+                    return jsonify({"success": True, "provider": provider, "models": models, "source": "live", "count": len(models)})
+        except Exception:
+            pass
+        cat_models = (DYNAMIC_CATALOG.get("ollama") or {}).get("models", BUILTIN_MODELS.get("ollama", []))
+        return jsonify({"success": True, "provider": provider, "models": cat_models, "source": "catalog", "count": len(cat_models)})
+
+    # 2. LM Studio local
+    if provider == "lmstudio":
+        lm_url = f"{(base_url or 'http://localhost:1234/v1').rstrip('/')}/models"
+        try:
+            req = urllib.request.Request(lm_url)
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+                models = [m.get("id") for m in data.get("data", []) if m.get("id")]
+                if models:
+                    if "lmstudio" in DYNAMIC_CATALOG:
+                        DYNAMIC_CATALOG["lmstudio"]["models"] = models
+                    return jsonify({"success": True, "provider": provider, "models": models, "source": "live", "count": len(models)})
+        except Exception:
+            pass
+        cat_models = (DYNAMIC_CATALOG.get("lmstudio") or {}).get("models", BUILTIN_MODELS.get("lmstudio", []))
+        return jsonify({"success": True, "provider": provider, "models": cat_models, "source": "catalog", "count": len(cat_models)})
+
+    # 3. Live models endpoint for OpenAI-compatible providers
+    live_models = []
+    models_url = ""
+    if base_url:
+        clean_base = base_url.rstrip('/')
+        if clean_base.endswith('/chat/completions'):
+            clean_base = clean_base[:-len('/chat/completions')]
+        models_url = f"{clean_base}/models"
+    elif provider == "openai":
+        models_url = "https://api.openai.com/v1/models"
+    elif provider == "openrouter":
+        models_url = "https://openrouter.ai/api/v1/models"
+    elif provider == "groq":
+        models_url = "https://api.groq.com/openai/v1/models"
+    elif provider == "mistral":
+        models_url = "https://api.mistral.ai/v1/models"
+    elif provider == "deepseek":
+        models_url = "https://api.deepseek.com/models"
+    elif provider == "nvidia":
+        models_url = "https://integrate.api.nvidia.com/v1/models"
+
+    if models_url and api_key:
+        try:
+            headers = {"Authorization": f"Bearer {api_key}", "User-Agent": "SkillScanner/1.0"}
+            req = urllib.request.Request(models_url, headers=headers)
+            with urllib.request.urlopen(req, timeout=4) as resp:
+                d = json.loads(resp.read().decode('utf-8'))
+                raw_items = d.get("data", [])
+                if isinstance(raw_items, list):
+                    live_models = [m.get("id") for m in raw_items if isinstance(m, dict) and m.get("id")]
+                if live_models:
+                    if provider in DYNAMIC_CATALOG and isinstance(DYNAMIC_CATALOG[provider], dict):
+                        DYNAMIC_CATALOG[provider]["models"] = live_models
+                    return jsonify({"success": True, "provider": provider, "models": live_models, "source": "live", "count": len(live_models)})
+        except Exception:
+            pass
+
+    # 4. Fallback to catalog
+    cat_entry = DYNAMIC_CATALOG.get(provider) or {}
+    cat_models = cat_entry.get("models", []) if isinstance(cat_entry, dict) else (cat_entry if isinstance(cat_entry, list) else [])
+    if not cat_models:
+        cat_models = BUILTIN_MODELS.get(provider, ["default"])
+    return jsonify({"success": True, "provider": provider, "models": cat_models, "source": "catalog", "count": len(cat_models)})
+
+@app.route('/api/refresh-catalog', methods=['POST', 'GET'])
+def refresh_catalog_endpoint():
+    try:
+        _init_catalog()
+        total_models = sum(len(v.get("models", [])) for v in DYNAMIC_CATALOG.values() if isinstance(v, dict))
+        return jsonify({
+            "success": True,
+            "providers_count": len(DYNAMIC_CATALOG),
+            "models_count": total_models,
+            "message": f"Successfully synced {len(DYNAMIC_CATALOG)} AI providers and {total_models} models!"
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/ollama-models', methods=['GET'])
+def get_ollama_models():
+    return auto_fetch_models()
+
+@app.route('/api/lmstudio-models', methods=['GET'])
+def get_lmstudio_models():
+    return auto_fetch_models()
+
+@app.route('/api/test-connection', methods=['POST'])
+def test_connection():
+    data = request.json or {}
+    provider = data.get("provider", "openai")
+    api_key = data.get("api_key")
+    model = data.get("model")
+    base_url = data.get("base_url")
+
+    conf = load_config()
+    p_conf = conf.get(provider, {})
+    if not isinstance(p_conf, dict):
+        p_conf = {}
+
+    effective_conf = dict(p_conf)
+    if api_key:
+        effective_conf["api_key"] = str(api_key).strip()
+    if base_url:
+        effective_conf["base_url"] = str(base_url).strip()
+
+    resolved_key = _resolve_api_key(provider, effective_conf)
+    if resolved_key:
+        effective_conf["api_key"] = resolved_key
+
+    if not model:
+        cat_entry = DYNAMIC_CATALOG.get(provider, {})
+        cat_models = cat_entry.get("models", []) if isinstance(cat_entry, dict) else []
+        model = effective_conf.get("model") or (cat_models[0] if cat_models else (BUILTIN_MODELS.get(provider) or ["default"])[0])
+
+    try:
+        test_sys = "You are a test helper. Reply ONLY with valid JSON: {\"status\": \"ok\"}."
+        test_user = "ping"
+        raw_resp = _execute_ai_request(provider, effective_conf, model, test_sys, test_user, json_mode=False)
+        return jsonify({
+            "success": True,
+            "message": f"Successfully connected to {provider} using {model}!",
+            "raw_response": raw_resp[:150]
+        })
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 400
 
 def open_browser():
     conf = load_config()

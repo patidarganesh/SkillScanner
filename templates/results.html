@@ -1248,6 +1248,16 @@
             document.getElementById('res-tree').innerText = scan.file_tree || 'No structure found';
         }
 
+        function escapeHtml(str) {
+            if (!str) return '';
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+
         function renderIssues(filter) {
             const listDiv = document.getElementById('res-issues');
             listDiv.innerHTML = '';
@@ -1278,15 +1288,16 @@
 
                 row.innerHTML = `
                     <div class="issue-header" onclick="this.parentElement.classList.toggle('expanded')">
-                        <div class="iss-badge">${i.severity || i.type}</div>
-                        <div class="iss-file">📍 ${i.file || 'Package'}</div>
-                        <div class="iss-title">${i.title}</div>
+                        <div class="iss-badge">${escapeHtml(i.severity || i.type)}</div>
+                        <div class="iss-file">📍 ${escapeHtml(i.file || 'Package')}</div>
+                        <div class="iss-title">${escapeHtml(i.title)}</div>
                         <div class="iss-toggle">▼</div>
                     </div>
                     <div class="issue-body">
-                        <div class="iss-desc">${i.description}</div>
-                        ${i.location ? `<div class="iss-loc">${i.location}</div>` : ''}
-                        ${i.fix ? `<div class="iss-fix">&rarr; FIX: ${i.fix}</div>` : ''}
+                        <div class="iss-desc">${escapeHtml(i.description)}</div>
+                        ${i.location ? `<div class="iss-loc">${escapeHtml(i.location)}</div>` : ''}
+                        ${i.evidence ? `<div class="iss-evidence" style="margin-top:8px; padding:8px 12px; background:rgba(0,0,0,0.4); border-left:3px solid var(--border); font-family:var(--font-mono); font-size:0.82rem; color:#cbd5e1; word-break:break-all;"><b>Evidence:</b> <code>${escapeHtml(i.evidence)}</code></div>` : ''}
+                        ${i.fix ? `<div class="iss-fix">&rarr; FIX: ${escapeHtml(i.fix)}</div>` : ''}
                     </div>
                 `;
                 listDiv.appendChild(row);

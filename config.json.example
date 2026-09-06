@@ -8,25 +8,54 @@
     "api_key": "YOUR_OPENAI_API_KEY",
     "model": "gpt-4o"
   },
-  "ollama": {
-    "base_url": "http://localhost:11434",
-    "model": "llama3.2",
-    "supported_models_to_try": [
-      "llama3.2",
-      "mistral",
-      "gemma2",
-      "qwen2.5",
-      "phi3",
-      "deepseek-coder"
-    ]
-  },
-  "openrouter": {
-    "api_key": "YOUR_OPENROUTER_API_KEY",
-    "model": "anthropic/claude-3.5-sonnet"
-  },
   "gemini": {
     "api_key": "YOUR_GEMINI_API_KEY",
     "model": "gemini-2.0-flash"
+  },
+  "deepseek": {
+    "api_key": "YOUR_DEEPSEEK_API_KEY",
+    "model": "deepseek-chat"
+  },
+  "groq": {
+    "api_key": "YOUR_GROQ_API_KEY",
+    "model": "llama-3.3-70b-versatile"
+  },
+  "openrouter": {
+    "api_key": "YOUR_OPENROUTER_API_KEY",
+    "model": "google/gemini-2.0-flash-001"
+  },
+  "mistral": {
+    "api_key": "YOUR_MISTRAL_API_KEY",
+    "model": "mistral-large-latest"
+  },
+  "xai": {
+    "api_key": "YOUR_XAI_API_KEY",
+    "model": "grok-2-latest"
+  },
+  "together": {
+    "api_key": "YOUR_TOGETHER_API_KEY",
+    "model": "meta-llama/Llama-3.3-70B-Instruct-Turbo"
+  },
+  "cerebras": {
+    "api_key": "YOUR_CEREBRAS_API_KEY",
+    "model": "llama3.3-70b"
+  },
+  "cohere": {
+    "api_key": "YOUR_COHERE_API_KEY",
+    "model": "command-r-plus-08-2024"
+  },
+  "ollama": {
+    "base_url": "http://localhost:11434",
+    "model": "llama3.2"
+  },
+  "lmstudio": {
+    "base_url": "http://localhost:1234/v1",
+    "model": "local-model"
+  },
+  "custom": {
+    "base_url": "http://localhost:8000/v1",
+    "api_key": "",
+    "model": "custom-model"
   },
   "server": {
     "host": "localhost",
