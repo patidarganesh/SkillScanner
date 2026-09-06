@@ -3,3 +3,8 @@ __pycache__/
 *.pyc
 .env
 tmp/
+*.bak*
+scans.json
+debug_proc.txt
+pytest.txt
+test_err.py

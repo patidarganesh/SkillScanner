@@ -1,0 +1,35 @@
+{
+  "provider": "openai",
+  "anthropic": {
+    "api_key": "YOUR_ANTHROPIC_API_KEY",
+    "model": "claude-3-7-sonnet"
+  },
+  "openai": {
+    "api_key": "YOUR_OPENAI_API_KEY",
+    "model": "gpt-4o"
+  },
+  "ollama": {
+    "base_url": "http://localhost:11434",
+    "model": "llama3.2",
+    "supported_models_to_try": [
+      "llama3.2",
+      "mistral",
+      "gemma2",
+      "qwen2.5",
+      "phi3",
+      "deepseek-coder"
+    ]
+  },
+  "openrouter": {
+    "api_key": "YOUR_OPENROUTER_API_KEY",
+    "model": "anthropic/claude-3.5-sonnet"
+  },
+  "gemini": {
+    "api_key": "YOUR_GEMINI_API_KEY",
+    "model": "gemini-2.0-flash"
+  },
+  "server": {
+    "host": "localhost",
+    "port": 5000
+  }
+}

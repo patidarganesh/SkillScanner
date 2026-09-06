@@ -202,7 +202,7 @@ This starts the native API server at `http://localhost:5000`. No massive setups 
 Before running SkillScan, you need to configure your AI provider in `config.json`.
 
 1. Open `config.json` in the root directory.
-2. Set the `"provider"` field to your preferred service (`"anthropic"`, `"openai"`, `"openrouter"`, or `"ollama"`).
+2. Set the `"provider"` field to your preferred service (`"anthropic"`, `"openai"`, `"openrouter"`, `"gemini"`, or `"ollama"`).
 3. Fill in your API key in the corresponding section.
 4. If using **Ollama**, ensure the Ollama server is running locally.
 
@@ -224,7 +224,11 @@ Before running SkillScan, you need to configure your AI provider in `config.json
 Yes. You can orchestrate local models by launching `ollama` natively, and switching the Application UI parameters directly to point towards it.
 
 **How does the file skipping logic work?**
-SkillScanner reads standard `.gitignore` logic dynamically in conjunction with extensions like `.exe`, `.dll`, `.jpg`, `.mp4` natively—blocking them from artificially raising API contexts.
+SkillScanner skips non-code assets (media, raw databases, compiled archives) and dependency directories (`node_modules`, `.venv`) to preserve LLM token context. However, it actively guards against bypasses:
+- If a skill references or executes files inside skipped directories (such as `.git/` or `.venv/`), they are automatically pulled in and scanned.
+- Skipped directories like `.git/` are audited for hidden scripts or malicious git hooks.
+- Python bytecode (`.pyc`) is disassembled into readable instructions for inspection.
+- Binary files are inspected for extracted strings, network URLs, and shell commands.
 
 **How accurate are the models?**
 The accuracy of the analysis depends heavily on the underlying LLM used. While SkillScan provides the framework for analysis, the quality of threat detection and remediation suggestions is directly tied to the capabilities of the chosen AI model.
