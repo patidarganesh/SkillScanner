@@ -949,10 +949,15 @@
             <p id="loading-sub">Connecting to local engine...</p>
         </div>
 
-        <div id="screen-error">
-            <h2>🚨 Analysis Failed</h2>
-            <p id="error-msg" style="margin-bottom: 30px;"></p>
-            <a href="/"><button class="primary" style="padding: 10px 20px;">Return Home</button></a>
+        <div id="screen-error" style="text-align:center; padding: 60px 20px;">
+            <div style="font-size: 3rem; margin-bottom: 16px;">⚠️</div>
+            <h2 style="color: var(--red); margin-bottom: 12px;">Analysis Failed</h2>
+            <p id="error-msg" style="color: var(--muted); max-width: 520px; margin: 0 auto 10px; line-height: 1.7;"></p>
+            <p id="error-hint" style="color: var(--muted); font-size: 0.82rem; max-width: 480px; margin: 0 auto 30px;"></p>
+            <div style="display: flex; gap: 12px; justify-content: center; flex-wrap: wrap;">
+                <a href="/"><button class="primary" style="padding: 10px 22px;">← New Scan</button></a>
+                <button onclick="location.reload()" style="padding: 10px 22px; border-color: rgba(255,255,255,0.15); color: var(--muted);">↺ Retry</button>
+            </div>
         </div>
 
         <!-- SCREEN 3: RESULTS -->
@@ -1032,7 +1037,16 @@
                 const status = data.data.status;
 
                 if (status === 'error') {
-                    throw new Error(data.data.error || "Unknown analysis error");
+                    let errMsg = data.data.error || '';
+                    // If error is empty, '0', or just a number — give a real message
+                    if (!errMsg || errMsg === '0' || /^\d+$/.test(errMsg.trim())) {
+                        errMsg = 'The analysis process crashed unexpectedly.';
+                    }
+                    clearInterval(pollInterval);
+                    document.getElementById('screen-loading').style.display = 'none';
+                    document.getElementById('screen-error').style.display = 'block';
+                    document.getElementById('error-msg').innerText = errMsg;
+                    document.getElementById('error-hint').innerText = 'Common causes: empty folder, only image/binary files, no AI key set, or network timeout.';
                 } else if (status === 'completed') {
                     clearInterval(pollInterval);
                     document.getElementById('screen-loading').style.display = 'none';
