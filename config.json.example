@@ -57,6 +57,10 @@
     "api_key": "",
     "model": "custom-model"
   },
+  "opencode": {
+    "api_key": "YOUR_OPENCODE_API_KEY",
+    "model": "mimo-v2.5-free"
+  },
   "server": {
     "host": "localhost",
     "port": 5000
