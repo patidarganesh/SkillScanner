@@ -1116,10 +1116,10 @@
                     </div>
                 </div>
                 <div class="hero-info">
-                    <div class="hero-title">🛡️ ${ai.package_name || scan.name}</div>
-                    <div class="hero-desc">${ai.summary || ai.package_purpose || ''}</div>
+                    <div class="hero-title">🛡️ ${escapeHtml(ai.package_name || scan.name || 'Unknown Package')}</div>
+                    <div class="hero-desc">${escapeHtml(ai.summary || ai.package_purpose || '')}</div>
                     <div style="color: ${colHex}; margin-bottom: 10px; font-family:var(--font-mono); font-size: 0.95rem; font-weight:bold;">
-                        [Score: ${score}] <span style="letter-spacing: 2px; color:rgba(255,255,255,0.7)">${dots}</span> &nbsp; ${ai.verdict || ''}
+                        [Score: ${score}] <span style="letter-spacing: 2px; color:rgba(255,255,255,0.7)">${dots}</span> &nbsp; ${escapeHtml(ai.verdict || '')}
                     </div>
                     <div class="hero-meta">
                         <div><span>Safety:</span> ${isSafe}</div>
@@ -1147,11 +1147,11 @@
                 let card = document.createElement('div');
                 card.className = `file-card glass-panel ${riskColor}`;
                 card.innerHTML = `
-                    <div class="f-name" title="${f.path}">📄 ${f.path.split('/').pop()}</div>
-                    <div class="f-role" title="${f.role || ''}">${f.role || ''}</div>
+                    <div class="f-name" title="${escapeHtml(f.path)}">📄 ${escapeHtml(f.path.split('/').pop())}</div>
+                    <div class="f-role" title="${escapeHtml(f.role || '')}">${escapeHtml(f.role || '')}</div>
                     <div class="f-score">
                         <span style="color:#fff;">Threats: ${threats}</span>
-                        <span>${(risk || '').toUpperCase().replace('_', ' ')}</span>
+                        <span>${escapeHtml((risk || '').toUpperCase().replace('_', ' '))}</span>
                     </div>
                 `;
                 filesDiv.appendChild(card);
@@ -1223,14 +1223,14 @@
             if (netAnalysis && netAnalysis.outbound_connections && netAnalysis.outbound_connections.length) {
                 netAnalysis.outbound_connections.forEach(conn => {
                     const riskClass = conn.risk === 'dangerous' ? 'color:var(--red)' : conn.risk === 'suspicious' ? 'color:var(--orange)' : 'color:var(--green)';
-                    crossDiv.innerHTML += `<div class="note-item"><div class="note-title" style="${riskClass}">${conn.url}</div><div class="note-desc">File: <b>${conn.file}</b><br>Purpose: ${conn.purpose}<br><span style="font-size:0.8rem; margin-top:8px; display:inline-block; ${riskClass}; font-weight:bold;">Risk: ${conn.risk.toUpperCase()}</span></div></div>`;
+                    crossDiv.innerHTML += `<div class="note-item"><div class="note-title" style="${riskClass}">${escapeHtml(conn.url)}</div><div class="note-desc">File: <b>${escapeHtml(conn.file)}</b><br>Purpose: ${escapeHtml(conn.purpose)}<br><span style="font-size:0.8rem; margin-top:8px; display:inline-block; ${riskClass}; font-weight:bold;">Risk: ${escapeHtml((conn.risk || '').toUpperCase())}</span></div></div>`;
                 });
                 if (netAnalysis.data_sent_externally) {
-                    crossDiv.innerHTML += `<div style="margin-top:12px; padding:10px; background:rgba(244,63,94,0.1); border:1px solid rgba(244,63,94,0.3); border-radius:8px; color:var(--red); font-size:0.9rem;"><b>⚠️ Data Exfiltration:</b> ${netAnalysis.data_sent_externally}</div>`;
+                    crossDiv.innerHTML += `<div style="margin-top:12px; padding:10px; background:rgba(244,63,94,0.1); border:1px solid rgba(244,63,94,0.3); border-radius:8px; color:var(--red); font-size:0.9rem;"><b>⚠️ Data Exfiltration:</b> ${escapeHtml(netAnalysis.data_sent_externally)}</div>`;
                 }
             } else if (ai.cross_file_issues && ai.cross_file_issues.length) {
                 ai.cross_file_issues.forEach(c => {
-                    crossDiv.innerHTML += `<div class="note-item"><div class="note-title warning">${(c.files || []).join(' ↔ ')}</div><div class="note-desc"><b>${c.title}</b><br>${c.description}</div></div>`;
+                    crossDiv.innerHTML += `<div class="note-item"><div class="note-title warning">${escapeHtml((c.files || []).join(' ↔ '))}</div><div class="note-desc"><b>${escapeHtml(c.title)}</b><br>${escapeHtml(c.description)}</div></div>`;
                 });
             } else { crossDiv.innerHTML += `<div style="color:var(--green); font-size:1.1rem; padding: 20px 0;">✅ No suspicious network activity</div>`; }
 
@@ -1246,15 +1246,15 @@
                 ];
                 permItems.forEach(p => {
                     if (p.data && p.data.length) {
-                        secDiv.innerHTML += `<div class="note-item"><div class="note-title">${p.label}</div><div class="note-desc">${p.data.join(', ')}</div></div>`;
+                        secDiv.innerHTML += `<div class="note-item"><div class="note-title">${escapeHtml(p.label)}</div><div class="note-desc">${escapeHtml((p.data || []).join(', '))}</div></div>`;
                     }
                 });
                 if (perms.excessive_permissions) {
-                    secDiv.innerHTML += `<div style="margin-top:12px; padding:10px; background:rgba(244,63,94,0.1); border:1px solid rgba(244,63,94,0.3); border-radius:8px; color:var(--red); font-size:0.9rem;"><b>⚠️ Excessive Permissions:</b> ${perms.justification}</div>`;
+                    secDiv.innerHTML += `<div style="margin-top:12px; padding:10px; background:rgba(244,63,94,0.1); border:1px solid rgba(244,63,94,0.3); border-radius:8px; color:var(--red); font-size:0.9rem;"><b>⚠️ Excessive Permissions:</b> ${escapeHtml(perms.justification || '')}</div>`;
                 }
             } else if (ai.security_notes && ai.security_notes.length) {
                 ai.security_notes.forEach(s => {
-                    secDiv.innerHTML += `<div class="note-item"><div class="note-title">Security Risk</div><div class="note-desc">${s}</div></div>`;
+                    secDiv.innerHTML += `<div class="note-item"><div class="note-title">Security Risk</div><div class="note-desc">${escapeHtml(s)}</div></div>`;
                 });
             } else { secDiv.innerHTML += `<div style="color:var(--green); font-size:1.1rem; padding: 20px 0;">✅ No excessive permissions detected</div>`; }
 
@@ -1265,7 +1265,7 @@
             if (roadmap.length) {
                 roadmap.forEach((r, i) => {
                     const sevColor = r.severity === 'critical' ? 'var(--red)' : r.severity === 'high' ? 'var(--orange)' : 'var(--yellow)';
-                    rmDiv.innerHTML += `<div class="rm-item glass-panel"><div class="rm-num" style="background:${sevColor}; color:#000;">#${r.step || (i + 1)}</div><div class="rm-content"><div class="rm-meta">[<span>${r.severity || r.effort} PRIORITY</span> &rarr; <span>${r.effort} EFFORT</span>]</div><div class="rm-action">${r.action}</div><div class="rm-why">Why: ${r.why}</div></div></div>`;
+                    rmDiv.innerHTML += `<div class="rm-item glass-panel"><div class="rm-num" style="background:${sevColor}; color:#000;">#${escapeHtml(String(r.step || (i + 1)))}</div><div class="rm-content"><div class="rm-meta">[<span>${escapeHtml(String(r.severity || r.effort || 'MEDIUM'))} PRIORITY</span> &rarr; <span>${escapeHtml(String(r.effort || 'LOW'))} EFFORT</span>]</div><div class="rm-action">${escapeHtml(r.action || '')}</div><div class="rm-why">Why: ${escapeHtml(r.why || '')}</div></div></div>`;
                 });
             } else { rmDiv.innerHTML = '<div style="color:var(--green)">✅ No remediation needed. Package is clean.</div>'; }
 

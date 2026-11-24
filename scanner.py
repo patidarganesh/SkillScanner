@@ -4,6 +4,7 @@ import dis
 import marshal
 import io
 import hashlib
+import json
 import zipfile
 import tarfile
 import pathlib
@@ -53,6 +54,96 @@ EXECUTABLE_SCRIPT_EXTS = {
 BINARY_EXECUTABLE_EXTS = {
     '.exe', '.dll', '.so', '.dylib', '.bin', '.elf', '.class', '.o', '.a'
 }
+
+# Dangerous execution and exfiltration patterns (Issue #3 defense & code audit)
+DANGEROUS_PATTERNS = [
+    # Pipe to shell (Download and execute / reverse shells)
+    {
+        "id": "pipe_to_shell",
+        "category": "malware",
+        "severity": "critical",
+        "title": "Remote payload execution via shell pipe (curl/wget | shell)",
+        "pattern": re.compile(r'(?:curl|wget)\s+[^|;\n]+\|\s*(?:bash|sh|perl|python[0-9.]*|zsh)', re.IGNORECASE),
+        "desc": "Downloads and directly executes remote code via shell pipe without integrity verification."
+    },
+    {
+        "id": "powershell_iex",
+        "category": "malware",
+        "severity": "critical",
+        "title": "PowerShell download and immediate execution (IEX/Invoke-Expression)",
+        "pattern": re.compile(r'(?:iex|invoke-expression)\s*(?:\(|;|\$)[^\n]+(?:http|downloadstring|webrequest)', re.IGNORECASE),
+        "desc": "PowerShell in-memory dynamic script download and execution."
+    },
+    # Reverse shells / networking
+    {
+        "id": "nc_reverse_shell",
+        "category": "malware",
+        "severity": "critical",
+        "title": "Netcat command execution / reverse shell payload",
+        "pattern": re.compile(r'\bnc(?:\.traditional)?\s+[^;\n]+-[a-z]*e\s+/(?:bin/)?(?:ba)?sh\b', re.IGNORECASE),
+        "desc": "Spawns an interactive shell over a raw network connection."
+    },
+    # Process Execution Sinks
+    {
+        "id": "subprocess_shell",
+        "category": "suspicious_behavior",
+        "severity": "high",
+        "title": "Arbitrary command execution via subprocess (shell=True)",
+        "pattern": re.compile(r'subprocess\.(?:Popen|run|call|check_output|check_call)\s*\([^)]*shell\s*=\s*True', re.IGNORECASE),
+        "desc": "Invokes system shell with shell=True, enabling command injection or arbitrary execution."
+    },
+    {
+        "id": "os_system_exec",
+        "category": "suspicious_behavior",
+        "severity": "high",
+        "title": "Direct system shell command invocation",
+        "pattern": re.compile(r'\b(?:os\.system|os\.popen|child_process\.(?:exec|execSync))\s*\(', re.IGNORECASE),
+        "desc": "Executes shell commands directly through OS runtime."
+    },
+    {
+        "id": "dynamic_eval",
+        "category": "obfuscated_code",
+        "severity": "high",
+        "title": "Dynamic unsanitized code evaluation (eval / Function constructor)",
+        "pattern": re.compile(r'\b(?:eval\s*\([^)]+|new\s+Function\s*\([^)]+)\b'),
+        "desc": "Dynamically interprets and executes unvalidated string input as code."
+    },
+    # Obfuscated payloads
+    {
+        "id": "b64_decode",
+        "category": "obfuscated_code",
+        "severity": "high",
+        "title": "Base64 obfuscated payload decoding detected",
+        "pattern": re.compile(r'\b(?:base64\.(?:b64decode|decode)|Buffer\.from\([^,]+,\s*[\'"]base64[\'"]\)|atob\s*\()\b', re.IGNORECASE),
+        "desc": "Decodes base64-encoded strings, often used to conceal malicious commands or payloads."
+    },
+    # Credential Harvesting
+    {
+        "id": "env_secret_harvesting",
+        "category": "data_exfiltration",
+        "severity": "high",
+        "title": "Environment credential harvesting (API keys / Secrets / SSH)",
+        "pattern": re.compile(r'(?:process\.env(?:\.|\s*\[\s*[\'"])|os\.(?:environ|getenv)\s*(?:\(\s*[\'"]|\[\s*[\'"]))(?:OPENAI_API_KEY|ANTHROPIC_API_KEY|AWS_SECRET_ACCESS_KEY|GITHUB_TOKEN|PRIVATE_KEY|PASSWORD|TOKEN|SECRET)', re.IGNORECASE),
+        "desc": "Directly accesses sensitive API keys, cloud credentials, or secrets from environment."
+    },
+    {
+        "id": "sensitive_files",
+        "category": "data_exfiltration",
+        "severity": "high",
+        "title": "Access to sensitive system or credential paths (/etc/passwd, id_rsa, .env)",
+        "pattern": re.compile(r'[\'"](?:\/etc\/(?:passwd|shadow)|(?:\~|\/root|\/home\/[^\/]+)?\/\.ssh\/(?:id_rsa|id_ed25519|authorized_keys)|\.env)[\'"]', re.IGNORECASE),
+        "desc": "Attempts to read system credentials, SSH keys, or environment files."
+    },
+    # Network Exfiltration targets
+    {
+        "id": "public_ip_call",
+        "category": "suspicious_behavior",
+        "severity": "medium",
+        "title": "Outbound connection to hardcoded external IP address",
+        "pattern": re.compile(r'https?://(?:(?!(?:127\.0\.0\.1|0\.0\.0\.0|localhost))\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(?::\d+)?(?:/[^\s\'"<>]*)?', re.IGNORECASE),
+        "desc": "Hardcoded external IP address without a registered domain name."
+    }
+]
 
 
 def extract_strings_from_bytes(data: bytes, min_len: int = 4) -> list:
@@ -280,8 +371,147 @@ def find_references_in_text(content: str) -> list:
     return refs
 
 
+def analyze_file_padding_and_bloat(raw_text: str, rel_path: str) -> dict:
+    """
+    Detect files padded with massive redundant filler comments or whitespace
+    designed to exceed scanner limits and evade detection (Issue #3).
+    Returns metrics and stripped, de-obfuscated content.
+    """
+    lines = raw_text.splitlines()
+    total_lines = len(lines)
+    
+    comment_prefixes = ('#', '//', '/*', '*', '<!--', ';', '--', '%')
+    filler_lines = 0
+    blank_lines = 0
+    
+    cleaned_lines = []
+    seen_comments = {}
+    
+    consecutive_comments = 0
+    max_consecutive_comments = 0
+    
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            blank_lines += 1
+            consecutive_comments = 0
+            if len(cleaned_lines) == 0 or cleaned_lines[-1] != "":
+                cleaned_lines.append("")
+            continue
+            
+        is_comment = any(stripped.startswith(p) for p in comment_prefixes)
+        if is_comment:
+            consecutive_comments += 1
+            if consecutive_comments > max_consecutive_comments:
+                max_consecutive_comments = consecutive_comments
+                
+            seen_comments[stripped] = seen_comments.get(stripped, 0) + 1
+            # If the exact comment line repeats frequently or contains filler indicators
+            is_dummy_word = any(w in stripped.lower() for w in ('dummy', 'filler', 'padding', 'test line', 'nothing here', 'placeholder'))
+            if seen_comments[stripped] > 5 or (is_dummy_word and consecutive_comments > 10):
+                filler_lines += 1
+                continue
+            elif consecutive_comments > 50:
+                # Truncate massive comment walls
+                filler_lines += 1
+                continue
+        else:
+            consecutive_comments = 0
+            
+        cleaned_lines.append(line)
+        
+    is_bloated = False
+    bloat_reason = ""
+    
+    if filler_lines >= 50:
+        is_bloated = True
+        bloat_reason = f"Contains {filler_lines} redundant filler comment lines"
+    elif max_consecutive_comments >= 100:
+        is_bloated = True
+        bloat_reason = f"Contains block of {max_consecutive_comments} consecutive comment lines"
+    elif total_lines >= 500 and (blank_lines + len([l for l in lines if any(l.strip().startswith(p) for p in comment_prefixes)])) / total_lines > 0.85:
+        is_bloated = True
+        bloat_reason = f"Over 85% of file lines ({total_lines} total) are comments or whitespace"
+
+    return {
+        "is_bloated": is_bloated,
+        "total_lines": total_lines,
+        "filler_lines": filler_lines,
+        "blank_lines": blank_lines,
+        "bloat_reason": bloat_reason,
+        "cleaned_text": "\n".join(cleaned_lines)
+    }
+
+
+def extract_security_sinks_and_slices(raw_text: str, rel_path: str) -> dict:
+    """
+    Scan entire file line-by-line for critical security patterns and extract
+    context slices around every match with line numbers (Fix for Issue #3).
+    """
+    lines = raw_text.splitlines()
+    total_lines = len(lines)
+    
+    detected_sinks = []
+    matched_lines = set()
+    
+    for idx, line in enumerate(lines):
+        line_num = idx + 1
+        line_str = line.strip()
+        if not line_str:
+            continue
+            
+        for pattern_info in DANGEROUS_PATTERNS:
+            if pattern_info["pattern"].search(line_str):
+                detected_sinks.append({
+                    "line": line_num,
+                    "pattern_id": pattern_info["id"],
+                    "category": pattern_info["category"],
+                    "severity": pattern_info["severity"],
+                    "title": pattern_info["title"],
+                    "description": pattern_info["desc"],
+                    "snippet": line_str[:200],
+                    "location": f"{rel_path}:{line_num}"
+                })
+                # Capture window around matched line
+                for w in range(max(0, idx - 3), min(total_lines, idx + 4)):
+                    matched_lines.add(w)
+                    
+    # Capture import statements across the file for proper contextual analysis
+    import_pattern = re.compile(r'^\s*(?:import\s+|from\s+[^\s]+\s+import|const\s+.*=\s*require\(|require\()')
+    for idx, line in enumerate(lines):
+        if import_pattern.search(line):
+            for w in range(max(0, idx - 1), min(total_lines, idx + 2)):
+                matched_lines.add(w)
+
+    sorted_matched = sorted(list(matched_lines))
+    slices = []
+    if sorted_matched:
+        current_slice = [sorted_matched[0]]
+        for line_idx in sorted_matched[1:]:
+            if line_idx == current_slice[-1] + 1:
+                current_slice.append(line_idx)
+            else:
+                slices.append(current_slice)
+                current_slice = [line_idx]
+        slices.append(current_slice)
+        
+    slice_blocks = []
+    for sl in slices[:30]:
+        start_ln = sl[0] + 1
+        end_ln = sl[-1] + 1
+        block_lines = [f"{i + 1:6d}: {lines[i]}" for i in sl]
+        slice_blocks.append(f"# --- Slice: Lines {start_ln}-{end_ln} ---\n" + "\n".join(block_lines))
+        
+    return {
+        "detected_sinks": detected_sinks,
+        "slice_text": "\n\n".join(slice_blocks),
+        "has_sinks": len(detected_sinks) > 0
+    }
+
+
 def scan(path: str) -> dict:
     target = Path(path).resolve()
+    base_dir = target if target.is_dir() else target.parent
     
     result = {
         "input_type": "folder" if target.is_dir() else "file",
@@ -298,9 +528,15 @@ def scan(path: str) -> dict:
     }
     
     finding_id = 1
+    seen_finding_keys = set()
 
     def add_static_finding(category: str, severity: str, title: str, description: str, evidence: str, location: str, recommendation: str):
         nonlocal finding_id
+        key = (category, severity, title, location)
+        if key in seen_finding_keys:
+            return
+        seen_finding_keys.add(key)
+        
         result["static_findings"].append({
             "id": finding_id,
             "category": category,
@@ -327,27 +563,119 @@ def scan(path: str) -> dict:
 
         try:
             size_bytes = file_path.stat().st_size
-            content = ""
-            truncated = False
+            
+            # 1. Guard against binary executables disguised with text extensions
+            with open(file_path, 'rb') as f:
+                header = f.read(1024)
+            if header.startswith(b'\x7fELF') or header.startswith(b'MZ') or header.count(b'\x00') > 20:
+                add_static_finding(
+                    category="malware",
+                    severity="critical",
+                    title="Binary executable disguised as text script",
+                    description=f"File '{rel_path}' has text extension '{ext}' but contains raw binary executable headers or null bytes.",
+                    evidence=f"Binary header signature in {rel_path}",
+                    location=rel_path,
+                    recommendation=f"Do not execute {rel_path}. Inspect native binary contents directly."
+                )
+                process_skipped_file(file_path, rel_path)
+                return
 
-            if size_bytes > 50 * 1024:
-                with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
-                    content = f.read(8000)
-                content += f"\n... [TRUNCATED — file is {size_bytes//1024}kb, showing first 8000 chars]"
+            # Read text safely (handle files up to 20MB)
+            if size_bytes > 20 * 1024 * 1024:
+                raw_text = header.decode('utf-8', errors='replace')
                 truncated = True
             else:
                 with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
-                    content = f.read()
+                    raw_text = f.read()
+                truncated = False
+
+            # 2. Analyze for Padding / Bloating Evasion (Fix for Issue #3)
+            bloat_info = analyze_file_padding_and_bloat(raw_text, rel_path)
+            if bloat_info["is_bloated"]:
+                add_static_finding(
+                    category="obfuscated_code",
+                    severity="high",
+                    title="Evasion via excessive padding/comment bloating detected",
+                    description=f"File '{rel_path}' ({size_bytes // 1024}KB, {bloat_info['total_lines']} lines) contains massive redundant filler/comments ({bloat_info['filler_lines']} lines stripped) designed to exceed scanner limits and evade detection.",
+                    evidence=f"Evasion padding: {bloat_info['bloat_reason']} in {rel_path}",
+                    location=rel_path,
+                    recommendation="Strip redundant filler code and inspect underlying functional code."
+                )
+
+            effective_text = bloat_info["cleaned_text"] if bloat_info["is_bloated"] else raw_text
+            
+            # 3. Extract Sinks & Slices across ENTIRE file (Fix for Issue #3)
+            sink_info = extract_security_sinks_and_slices(raw_text, rel_path)
+            
+            # Add static findings for all detected high-risk sinks
+            for s in sink_info["detected_sinks"]:
+                add_static_finding(
+                    category=s["category"],
+                    severity=s["severity"],
+                    title=s["title"],
+                    description=s["description"],
+                    evidence=s["snippet"],
+                    location=s["location"],
+                    recommendation="Review sink call and eliminate unverified shell execution or secret exposure."
+                )
+
+            # Special audit for package.json scripts (preinstall, postinstall)
+            if file_path.name.lower() == 'package.json':
+                try:
+                    pkg_data = json.loads(raw_text)
+                    scripts = pkg_data.get('scripts', {})
+                    for hook in ('preinstall', 'postinstall', 'install'):
+                        if hook in scripts:
+                            add_static_finding(
+                                category="supply_chain_risk",
+                                severity="medium",
+                                title=f"Automated npm lifecycle hook detected ({hook})",
+                                description=f"package.json defines a '{hook}' script: '{scripts[hook]}'. Lifecycle hooks run automatically upon installation and are frequently used to deploy malware.",
+                                evidence=f"\"scripts\": {{ \"{hook}\": \"{scripts[hook]}\" }}",
+                                location=f"{rel_path}:scripts.{hook}",
+                                recommendation=f"Audit command in '{hook}' script to ensure it does not run unverified code."
+                            )
+                except Exception:
+                    pass
+
+            # 4. Construct LLM Content (Slice-Based approach for oversized files)
+            final_content = ""
+            effective_len = len(effective_text)
+            
+            if effective_len <= 30 * 1024:
+                final_content = effective_text
+                truncated = False
+            else:
+                head_chars = 3500
+                tail_chars = 3500
+                head_content = effective_text[:head_chars]
+                tail_content = effective_text[-tail_chars:]
+                
+                parts = []
+                parts.append(f"# [OVERSIZED FILE PROCESSED: {rel_path} ({size_bytes // 1024}KB, {bloat_info['total_lines']} lines)]")
+                if bloat_info["is_bloated"]:
+                    parts.append(f"# [EVASION DEFENSE: Stripped {bloat_info['filler_lines']} redundant filler lines]")
+                parts.append("# [SLICE-BASED ANALYSIS: Sinks and sensitive operations captured across full file]")
+                parts.append(f"\n=== [FILE HEAD (First {head_chars} chars)] ===\n{head_content}\n")
+                
+                if sink_info["slice_text"]:
+                    parts.append(f"=== [EXTRACTED HIGH-RISK CODE SLICES & SINKS] ===\n{sink_info['slice_text']}\n")
+                else:
+                    parts.append("=== [NO HIGH-RISK SINKS IDENTIFIED IN BODY] ===\n")
+                    
+                parts.append(f"=== [FILE TAIL (Last {tail_chars} chars)] ===\n{tail_content}")
+                final_content = "\n".join(parts)
+                truncated = True
 
             if special_note:
-                content = f"# [SECURITY WARNING: {special_note}]\n" + content
+                final_content = f"# [SECURITY WARNING: {special_note}]\n" + final_content
 
             result["readable_files"] += 1
             result["files"].append({
                 "relative_path": rel_path,
                 "extension": ext,
                 "size_bytes": size_bytes,
-                "content": content,
+                "content": final_content,
                 "truncated": truncated,
                 "special_note": special_note
             })
@@ -437,7 +765,6 @@ def scan(path: str) -> dict:
                 recommendation=f"Remove binary {rel_path} or replace with transparent, auditable open-source scripts."
             )
 
-            # Also provide extracted strings to file dump so AI can inspect them
             bin_summary = (
                 f"# [BINARY METADATA & EXTRACTED STRINGS: {rel_path}]\n"
                 f"# Size: {size_bytes} bytes | SHA256: {bin_info.get('sha256')}\n"
@@ -498,6 +825,25 @@ def scan(path: str) -> dict:
             root_path = Path(root)
             for file in files:
                 file_path = root_path / file
+                
+                # Check for symlink escaping target
+                if file_path.is_symlink():
+                    try:
+                        resolved = file_path.resolve()
+                        if not str(resolved).startswith(str(target)):
+                            add_static_finding(
+                                category="data_exfiltration",
+                                severity="high",
+                                title="Symlink escaping package root detected",
+                                description=f"File '{file}' is a symlink pointing outside package boundary to '{resolved}'.",
+                                evidence=f"Symlink: {file} -> {resolved}",
+                                location=file,
+                                recommendation="Remove external symlinks to prevent host file disclosure."
+                            )
+                            continue
+                    except Exception:
+                        continue
+
                 try:
                     rel_path = str(file_path.relative_to(target)).replace('\\', '/')
                 except ValueError:
@@ -521,7 +867,6 @@ def scan(path: str) -> dict:
             in_skipped_dir = any(p in SKIP_DIRS or p.startswith('.git') for p in path_parts)
             
             if in_skipped_dir:
-                # We are inside a skipped directory!
                 for file in files:
                     file_path = root_path / file
                     try:
@@ -533,10 +878,8 @@ def scan(path: str) -> dict:
 
                     # Check for anomalous scripts or executables in .git
                     if '.git' in path_parts or rel_path.startswith('.git/'):
-                        # Inside .git: standard files are HEAD, config, refs, objects, index, etc.
                         is_hook = 'hooks' in path_parts
                         if is_hook:
-                            # Active git hook that is NOT sample
                             if not file.endswith('.sample') and not file.endswith('.txt'):
                                 add_static_finding(
                                     category="malware",
@@ -578,7 +921,6 @@ def scan(path: str) -> dict:
                             process_readable_file(file_path, rel_path, special_note="HIDDEN SCRIPT IN __pycache__")
 
         # 3. CROSS-REFERENCE DETECTION (Connecting SKILL.md / scripts to skipped targets)
-        # Scan all readable files collected so far to see if they reference or execute files in skipped dirs or skipped types
         for f in list(result["files"]):
             file_content = f.get("content", "")
             source_file = f.get("relative_path", "")
@@ -586,7 +928,6 @@ def scan(path: str) -> dict:
             refs = find_references_in_text(file_content)
             for ref in refs:
                 ref_clean = ref.strip().strip("'\"").replace('\\', '/')
-                # Check if this reference targets a skipped directory or skipped file type
                 is_targeting_skip_dir = any(ref_clean.startswith(sd + '/') or f"/{sd}/" in ref_clean for sd in SKIP_DIRS)
                 is_targeting_skip_dir = is_targeting_skip_dir or ref_clean.startswith('.git/') or '/.git/' in ref_clean
                 
@@ -600,25 +941,28 @@ def scan(path: str) -> dict:
                         "type": "skipped_directory" if is_targeting_skip_dir else "skipped_file_type"
                     })
 
-                    # Try to locate the referenced file on disk relative to target
+                    # Locate referenced file safely relative to base_dir
                     cand_paths = [
-                        target / ref_clean,
-                        target / ref_clean.lstrip('/'),
-                        (target / source_file).parent / ref_clean
+                        base_dir / ref_clean,
+                        base_dir / ref_clean.lstrip('/'),
+                        (base_dir / source_file).parent / ref_clean if source_file else base_dir / ref_clean
                     ]
                     resolved_file = None
                     for cand in cand_paths:
                         try:
                             if cand.exists() and cand.is_file():
-                                resolved_file = cand.resolve()
-                                break
+                                cand_res = cand.resolve()
+                                # Verify resolved path is within base_dir boundary
+                                if str(cand_res).startswith(str(base_dir)):
+                                    resolved_file = cand_res
+                                    break
                         except Exception:
                             continue
 
                     # If file exists on disk and was not processed yet, PULL IT IN!
                     if resolved_file and str(resolved_file) not in processed_paths:
                         try:
-                            res_rel = str(resolved_file.relative_to(target)).replace('\\', '/')
+                            res_rel = str(resolved_file.relative_to(base_dir)).replace('\\', '/')
                         except ValueError:
                             res_rel = resolved_file.name
 

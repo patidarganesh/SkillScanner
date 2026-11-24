@@ -1159,6 +1159,16 @@
             await fetchConfig();
         }
 
+        function escapeHtml(str) {
+            if (str === null || str === undefined) return '';
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+
         /* --- HISTORY LOGIC --- */
         async function loadHistory() {
             try {
@@ -1185,20 +1195,26 @@
                     const el = document.createElement('div');
                     el.style.cssText = "display: flex; justify-content: space-between; align-items: center; background: rgba(0,0,0,0.3); padding: 12px 16px; border-radius: 8px; border: 1px solid var(--border);";
                     el.innerHTML = `
-                        <div style="flex-grow: 1; cursor: pointer;" onclick="window.location.href='/results/${item.id}'">
-                            <div style="color: #fff; font-weight: bold; font-family: var(--font-head); margin-bottom: 4px;">${item.name}</div>
+                        <div style="flex-grow: 1; cursor: pointer;" onclick="window.location.href='/results/${escapeHtml(item.id)}'">
+                            <div style="color: #fff; font-weight: bold; font-family: var(--font-head); margin-bottom: 4px;">${escapeHtml(item.name)}</div>
                             <div style="color: var(--muted); font-size: 0.8rem; display: flex; gap: 15px;">
-                                <span>${dtStr}</span>
+                                <span>${escapeHtml(dtStr)}</span>
                                 <span style="color: ${verdColor}; font-weight: 500;">
-                                    Score: ${item.score} &middot; ${item.verdict || 'Scan'}
+                                    Score: ${escapeHtml(String(item.score))} &middot; ${escapeHtml(item.verdict || 'Scan')}
                                 </span>
                             </div>
                         </div>
                         <div style="display: flex; gap: 8px; margin-left: 15px;">
-                            <button onclick="renameScan('${item.id}', '${item.name.replace(/'/g, "\\'")}')" style="padding: 6px; font-size: 0.85rem;" title="Rename">✏️</button>
-                            <button onclick="deleteScan('${item.id}')" style="padding: 6px; font-size: 0.85rem; color: var(--red);" title="Delete">🗑️</button>
+                            <button class="rename-scan-btn" data-id="${escapeHtml(item.id)}" data-name="${escapeHtml(item.name)}" style="padding: 6px; font-size: 0.85rem;" title="Rename">✏️</button>
+                            <button class="delete-scan-btn" data-id="${escapeHtml(item.id)}" style="padding: 6px; font-size: 0.85rem; color: var(--red);" title="Delete">🗑️</button>
                         </div>
                     `;
+                    el.querySelector('.rename-scan-btn').onclick = function() {
+                        renameScan(this.dataset.id, this.dataset.name);
+                    };
+                    el.querySelector('.delete-scan-btn').onclick = function() {
+                        deleteScan(this.dataset.id);
+                    };
                     list.appendChild(el);
                 });
             } catch (e) {

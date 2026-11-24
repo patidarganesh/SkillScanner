@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import urllib.request
 import urllib.error
@@ -366,6 +367,8 @@ def _load_dotenv() -> None:
 def _redact_secret(value: str) -> str:
     if not value:
         return value
+    if len(value) <= 6:
+        return "[REDACTED]"
     return f"[REDACTED...{value[-4:]}]"
 
 def _redact_headers(headers: dict) -> dict:
@@ -438,12 +441,23 @@ def _resolve_api_key(provider_name: str, provider_conf: dict) -> str:
 
     return api_key
 
+scans_lock = threading.Lock()
+
 def load_config():
     config_path = BASE_DIR / 'config.json'
     if config_path.exists():
-        with open(config_path, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    print(f"Warning: No config.json found at {config_path}")
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Warning: Corrupted config.json: {e}")
+            example_path = BASE_DIR / 'config.json.example'
+            if example_path.exists():
+                try:
+                    with open(example_path, 'r', encoding='utf-8') as f:
+                        return json.load(f)
+                except Exception:
+                    pass
     return {}
 
 def load_scans():
@@ -451,13 +465,20 @@ def load_scans():
         try:
             with open(SCANS_FILE, 'r', encoding='utf-8') as f:
                 return json.load(f)
-        except Exception:
+        except Exception as e:
+            print(f"Warning: Failed to load scans.json: {e}")
             return {}
     return {}
 
 def save_scans():
-    with open(SCANS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(SCANS, f, indent=2)
+    with scans_lock:
+        try:
+            temp_file = SCANS_FILE.with_suffix('.tmp')
+            with open(temp_file, 'w', encoding='utf-8') as f:
+                json.dump(SCANS, f, indent=2)
+            temp_file.replace(SCANS_FILE)
+        except Exception as e:
+            print(f"Error saving scans: {e}")
 
 SCANS = load_scans()
 
@@ -471,9 +492,9 @@ def _get_provider_endpoint(provider_name: str, cfg: dict) -> str:
     base = str(base).rstrip('/')
 
     if provider_name == "anthropic":
-        return "https://api.anthropic.com/v1/messages"
+        return f"{base}/messages" if base else "https://api.anthropic.com/v1/messages"
     elif provider_name in ("gemini", "google"):
-        return "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+        return f"{base}/chat/completions" if base else "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
     elif provider_name == "cohere":
         return f"{base}/chat" if base else "https://api.cohere.com/v2/chat"
     elif provider_name == "ollama":
@@ -561,14 +582,45 @@ def _extract_provider_response(provider_name: str, data: dict) -> str:
         return str(data)
 
 def clean_json(raw: str) -> str:
-    raw = raw.strip()
+    raw = str(raw).strip()
+    
+    # 1. Match markdown code block ```json ... ``` or ``` ... ```
+    code_match = re.search(r'```(?:json)?\s*\n?([\s\S]*?)\n?```', raw, re.IGNORECASE)
+    if code_match:
+        cand = code_match.group(1).strip()
+        try:
+            json.loads(cand)
+            return cand
+        except Exception:
+            pass
+
+    # 2. Check if already valid JSON as-is
+    try:
+        json.loads(raw)
+        return raw
+    except Exception:
+        pass
+
+    # 3. Search for outermost JSON object { ... }
+    first_brace = raw.find('{')
+    last_brace = raw.rfind('}')
+    if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+        cand = raw[first_brace:last_brace + 1].strip()
+        try:
+            json.loads(cand)
+            return cand
+        except Exception:
+            return cand
+
+    # 4. Fallback: strip leading/trailing code fence lines
     if raw.startswith("```"):
         lines = raw.split("\n")
         lines = [l for l in lines if not l.strip().startswith("```")]
-        raw = "\n".join(lines).strip()
+        return "\n".join(lines).strip()
+        
     return raw
 
-def _execute_ai_request(provider_name: str, effective_conf: dict, model: str, system_prompt: str, user_payload: str, json_mode: bool = True) -> str:
+def _execute_ai_request(provider_name: str, effective_conf: dict, model: str, system_prompt: str, user_payload: str, json_mode: bool = True, timeout: int = 180) -> str:
     url = _get_provider_endpoint(provider_name, effective_conf)
     headers_dict = _get_provider_headers(provider_name, effective_conf)
     body_data = _get_provider_body(provider_name, model, system_prompt, user_payload, json_mode)
@@ -587,7 +639,7 @@ def _execute_ai_request(provider_name: str, effective_conf: dict, model: str, sy
         print("HEADERS:", _redact_headers(dict(req.headers)))
         print("------------------------------")
 
-    with urllib.request.urlopen(req, timeout=180) as response:
+    with urllib.request.urlopen(req, timeout=timeout) as response:
         resp_body = response.read().decode("utf-8", errors="replace")
         resp_data = json.loads(resp_body)
         return _extract_provider_response(provider_name, resp_data)
@@ -693,7 +745,10 @@ def build_payload(scan_res: dict) -> str:
 
 def run_analysis_task(scan_id, path=None, is_folder=False, extract_dir=None, file_name=None):
     try:
-        SCANS[scan_id]["status"] = "processing"
+        with scans_lock:
+            if scan_id in SCANS:
+                SCANS[scan_id]["status"] = "processing"
+        save_scans()
         
         target_path = path if path else extract_dir
         scan_res = scan(target_path)
@@ -766,22 +821,28 @@ def run_analysis_task(scan_id, path=None, is_folder=False, extract_dir=None, fil
             if 'content' in f:
                 del f['content']
                 
-        SCANS[scan_id]["result"] = ai_res
-        SCANS[scan_id]["scan_summary"] = scan_res
-        SCANS[scan_id]["status"] = "completed"
+        with scans_lock:
+            if scan_id in SCANS:
+                SCANS[scan_id]["result"] = ai_res
+                SCANS[scan_id]["scan_summary"] = scan_res
+                SCANS[scan_id]["status"] = "completed"
         save_scans()
     except SystemExit as se:
-        SCANS[scan_id]["status"] = "error"
-        SCANS[scan_id]["error"] = "The scan process exited unexpectedly. This usually means the folder had no readable files or was empty."
+        with scans_lock:
+            if scan_id in SCANS:
+                SCANS[scan_id]["status"] = "error"
+                SCANS[scan_id]["error"] = "The scan process exited unexpectedly. This usually means the folder had no readable files or was empty."
         save_scans()
     except Exception as e:
         import traceback as _tb
         err_str = str(e).strip()
         if not err_str or err_str == '0':
             err_str = "An unexpected error occurred during analysis. The folder may be empty or contain only unsupported file types."
-        SCANS[scan_id]["status"] = "error"
-        SCANS[scan_id]["error"] = err_str
-        SCANS[scan_id]["error_detail"] = _tb.format_exc()
+        with scans_lock:
+            if scan_id in SCANS:
+                SCANS[scan_id]["status"] = "error"
+                SCANS[scan_id]["error"] = err_str
+                SCANS[scan_id]["error_detail"] = _tb.format_exc()
         save_scans()
     finally:
         if extract_dir:
@@ -814,12 +875,16 @@ def results_page(scan_id):
 @app.route('/api/scans', methods=['GET', 'DELETE'])
 def handle_scans():
     if request.method == 'DELETE':
-        SCANS.clear()
+        with scans_lock:
+            SCANS.clear()
         save_scans()
         return jsonify({"success": True})
         
     history = []
-    for s_id, data in SCANS.items():
+    with scans_lock:
+        items_copy = list(SCANS.items())
+
+    for s_id, data in items_copy:
         if data.get("status") in ["completed", "error"]:
             summary = data.get("scan_summary", {})
             result = data.get("result", {})
@@ -836,27 +901,29 @@ def handle_scans():
 
 @app.route('/api/scan/<scan_id>', methods=['GET'])
 def get_scan(scan_id):
-    if scan_id not in SCANS:
-        return jsonify({"success": False, "error": "Scan not found"}), 404
-    return jsonify({"success": True, "data": SCANS[scan_id]})
+    with scans_lock:
+        if scan_id not in SCANS:
+            return jsonify({"success": False, "error": "Scan not found"}), 404
+        return jsonify({"success": True, "data": dict(SCANS[scan_id])})
 
 @app.route('/api/scan/<scan_id>', methods=['PUT', 'DELETE'])
 def modify_scan(scan_id):
-    if scan_id not in SCANS:
-        return jsonify({"success": False, "error": "Scan not found"}), 404
-        
-    if request.method == 'DELETE':
-        del SCANS[scan_id]
-        save_scans()
-        return jsonify({"success": True})
-        
-    if request.method == 'PUT':
-        data = request.json
-        if data and "name" in data:
-            SCANS[scan_id]["name"] = data["name"]
+    with scans_lock:
+        if scan_id not in SCANS:
+            return jsonify({"success": False, "error": "Scan not found"}), 404
+            
+        if request.method == 'DELETE':
+            del SCANS[scan_id]
             save_scans()
             return jsonify({"success": True})
-        return jsonify({"success": False, "error": "No name provided"}), 400
+            
+        if request.method == 'PUT':
+            data = request.json
+            if data and "name" in data:
+                SCANS[scan_id]["name"] = data["name"]
+                save_scans()
+                return jsonify({"success": True})
+            return jsonify({"success": False, "error": "No name provided"}), 400
 
 @app.route('/analyse', methods=['POST'])
 def analyse():
@@ -869,11 +936,12 @@ def analyse():
         return jsonify({"success": False, "error": f"Path not found: {path}"}), 404
         
     scan_id = str(uuid.uuid4())
-    SCANS[scan_id] = {
-        "status": "pending", 
-        "timestamp": time.time(),
-        "name": os.path.basename(path) or path
-    }
+    with scans_lock:
+        SCANS[scan_id] = {
+            "status": "pending", 
+            "timestamp": time.time(),
+            "name": os.path.basename(path) or path
+        }
     save_scans()
     threading.Thread(target=run_analysis_task, args=(scan_id, path, False, None, None)).start()
     return jsonify({"success": True, "scan_id": scan_id})
@@ -893,18 +961,27 @@ def analyse_zip():
     temp_dir = tempfile.mkdtemp()
     zip_path = os.path.join(temp_dir, "uploaded.zip")
     extract_dir = os.path.join(temp_dir, "extracted")
+    os.makedirs(extract_dir, exist_ok=True)
     
     try:
         file.save(zip_path)
+        extract_dir_resolved = Path(extract_dir).resolve()
+        
         with zipfile.ZipFile(zip_path, 'r') as zf:
+            # Defend against Zip Slip path traversal
+            for member in zf.infolist():
+                member_target = (extract_dir_resolved / member.filename).resolve()
+                if not str(member_target).startswith(str(extract_dir_resolved)):
+                    raise ValueError(f"Zip slip path traversal detected in zip member: {member.filename}")
             zf.extractall(extract_dir)
             
         scan_id = str(uuid.uuid4())
-        SCANS[scan_id] = {
-            "status": "pending", 
-            "timestamp": time.time(),
-            "name": file.filename
-        }
+        with scans_lock:
+            SCANS[scan_id] = {
+                "status": "pending", 
+                "timestamp": time.time(),
+                "name": file.filename
+            }
         save_scans()
         threading.Thread(target=run_analysis_task, args=(scan_id, None, False, extract_dir, file.filename)).start()
         return jsonify({"success": True, "scan_id": scan_id})
@@ -924,6 +1001,7 @@ def analyse_folder():
     temp_dir = tempfile.mkdtemp()
     extract_dir = os.path.join(temp_dir, "folder")
     os.makedirs(extract_dir, exist_ok=True)
+    extract_dir_resolved = Path(extract_dir).resolve()
     
     root_folder_name = "Uploaded Folder"
     if paths and len(paths) > 0:
@@ -935,16 +1013,19 @@ def analyse_folder():
         for idx, file in enumerate(files):
             rel_path = paths[idx] if idx < len(paths) and paths[idx] else (file.filename or f"file_{idx}")
             clean_rel = os.path.normpath(rel_path.replace('\\', '/')).lstrip('/\\.')
-            target_file_path = os.path.join(extract_dir, clean_rel)
-            os.makedirs(os.path.dirname(target_file_path), exist_ok=True)
-            file.save(target_file_path)
+            target_file_path = (extract_dir_resolved / clean_rel).resolve()
+            if not str(target_file_path).startswith(str(extract_dir_resolved)):
+                raise ValueError(f"Path traversal detected in upload path: {rel_path}")
+            os.makedirs(os.path.dirname(str(target_file_path)), exist_ok=True)
+            file.save(str(target_file_path))
             
         scan_id = str(uuid.uuid4())
-        SCANS[scan_id] = {
-            "status": "pending", 
-            "timestamp": time.time(),
-            "name": root_folder_name
-        }
+        with scans_lock:
+            SCANS[scan_id] = {
+                "status": "pending", 
+                "timestamp": time.time(),
+                "name": root_folder_name
+            }
         save_scans()
         threading.Thread(target=run_analysis_task, args=(scan_id, None, True, extract_dir, root_folder_name)).start()
         return jsonify({"success": True, "scan_id": scan_id})
@@ -956,19 +1037,19 @@ def analyse_folder():
 @app.route('/api/dummy-scan', methods=['POST'])
 def dummy_scan():
     scan_id = str(uuid.uuid4())
-    SCANS[scan_id] = {
+    dummy_entry = {
         "status": "completed",
         "timestamp": time.time(),
         "name": "test-auth-package"
     }
-    SCANS[scan_id]["scan_summary"] = {
+    dummy_entry["scan_summary"] = {
         "name": "test-auth-package",
         "input_type": "folder",
         "readable_files": 8,
         "skipped_files": 2,
         "file_tree": "test-auth-package/\n├── SKILL.md\n├── _meta.json\n└── src/\n    ├── api.js\n    └── utils.js"
     }
-    SCANS[scan_id]["result"] = {
+    dummy_entry["result"] = {
         "package_name": "test-auth-package",
         "package_purpose": "Authentication utility for AI agents",
         "threat_level": "CRITICAL",
@@ -1048,6 +1129,8 @@ def dummy_scan():
             "risky_files": 1
         }
     }
+    with scans_lock:
+        SCANS[scan_id] = dummy_entry
     save_scans()
     return jsonify({"success": True, "scan_id": scan_id})
 
@@ -1298,7 +1381,7 @@ def test_connection():
     try:
         test_sys = "You are a test helper. Reply ONLY with valid JSON: {\"status\": \"ok\"}."
         test_user = "ping"
-        raw_resp = _execute_ai_request(provider, effective_conf, model, test_sys, test_user, json_mode=False)
+        raw_resp = _execute_ai_request(provider, effective_conf, model, test_sys, test_user, json_mode=False, timeout=10)
         return jsonify({
             "success": True,
             "message": f"Successfully connected to {provider} using {model}!",
