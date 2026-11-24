@@ -223,12 +223,16 @@ Before running SkillScan, you need to configure your AI provider in `config.json
 **Can I run this entirely offline using local models?**
 Yes. You can orchestrate local models by launching `ollama` natively, and switching the Application UI parameters directly to point towards it.
 
-**How does the file skipping logic work?**
-SkillScanner skips non-code assets (media, raw databases, compiled archives) and dependency directories (`node_modules`, `.venv`) to preserve LLM token context. However, it actively guards against bypasses:
-- If a skill references or executes files inside skipped directories (such as `.git/` or `.venv/`), they are automatically pulled in and scanned.
-- Skipped directories like `.git/` are audited for hidden scripts or malicious git hooks.
-- Python bytecode (`.pyc`) is disassembled into readable instructions for inspection.
-- Binary files are inspected for extracted strings, network URLs, and shell commands.
+**How does the file skipping and anti-evasion logic work?**
+SkillScanner skips non-code assets (media, raw databases, compiled archives) and dependency directories (`node_modules`, `.venv`) to preserve LLM token context. However, it actively guards against evasion vectors:
+- **Skipped Directory Bypasses:** If a skill references or executes files inside skipped directories (such as `.git/` or `.venv/`), they are automatically pulled in and scanned.
+- **Stealth Git Hooks:** Skipped directories like `.git/` are audited for active git hooks and hidden execution scripts.
+- **Compiled Bytecode Inspection:** Standalone Python bytecode (`.pyc`) without matching source is automatically disassembled into bytecode instructions for inspection.
+- **Binary Strings Extraction:** Opaque native binaries (`.exe`, `.dll`, `.so`, `.bin`) are inspected for C2 URLs, IP addresses, and shell commands.
+- **File Padding & Bloat Evasion Defense:** Detects artificial comment walls and whitespace padding designed to bypass token limits. Strips redundant filler lines and performs full-file slice extraction around high-risk sinks so payloads cannot hide behind oversized files.
+
+**Can SkillScan audit Model Context Protocol (MCP) servers and tool plugins?**
+Yes. You can point SkillScan to any MCP server directory or plugin package (Python, TypeScript, Node.js). It will inspect tool handlers, dynamic execution calls, outbound network requests, and environment variable accesses.
 
 **How accurate are the models?**
 The accuracy of the analysis depends heavily on the underlying LLM used. While SkillScan provides the framework for analysis, the quality of threat detection and remediation suggestions is directly tied to the capabilities of the chosen AI model.
@@ -244,6 +248,10 @@ python app.py         # Full native runtime execution on local flask
 <br/>
 
 
+
+## ⭐ Star This Repo
+
+If you find SkillScan useful for auditing AI skills, MCP servers, and agent packages, please give us a star on GitHub! It helps more developers and security researchers discover the project.
 
 ## Contributing
 
